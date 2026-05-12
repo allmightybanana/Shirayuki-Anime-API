@@ -117,6 +117,45 @@ const extractTrending = ($) => {
   return trending;
 };
 
+const extractSpotlight = ($) => {
+  const spotlight = [];
+
+  $('#slider .swiper-slide .deslide-item').each((index, el) => {
+    const $item = $(el);
+    const title = $item.find('.desi-head-title').text().trim();
+    const poster =
+      $item.find('.deslide-cover-img img').attr('data-src') ||
+      $item.find('.deslide-cover-img img').attr('src') ||
+      null;
+    const href = $item.find('a[href*="/watch/"]').first().attr('href') || null;
+    const jname = $item.find('.desi-head-title').attr('data-jp') || null;
+    const rankText = $item.find('.desi-sub-text').text().trim();
+    const rank = parseNumber(rankText);
+    const type = $item.find('.scd-item').first().text().trim() || null;
+    const duration = $item.find('.scd-item').eq(1).text().trim() || null;
+    const releaseDate = $item.find('.scd-item').eq(2).text().trim() || null;
+    const description = $item.find('.desi-description').text().trim() || null;
+
+    if (!title) return;
+
+    spotlight.push({
+      rank: rank || index + 1,
+      id: href ? href.replace('/watch/', '') : null,
+      title,
+      jname,
+      poster,
+      href,
+      watchUrl: href ? toAbsoluteUrl(href) : null,
+      type,
+      duration,
+      releaseDate,
+      description,
+    });
+  });
+
+  return spotlight;
+};
+
 const extractLatestUpdates = ($) => {
   const latestHeading = $('.cat-heading')
     .filter((_, el) => $(el).text().trim() === 'Latest Updates')
@@ -189,6 +228,7 @@ export const getHianimHomePage = async () => {
     const { $, url } = await fetchHianimeePage(HIANIME_HOME_URL);
 
     const trending = extractTrending($);
+    const spotlight = extractSpotlight($);
     const latestUpdates = extractLatestUpdates($);
     const mostViewed = extractMostViewed($);
 
@@ -199,6 +239,7 @@ export const getHianimHomePage = async () => {
 
     return {
       url,
+      spotlight,
       trending,
       latestUpdates,
       mostViewed,
@@ -207,6 +248,7 @@ export const getHianimHomePage = async () => {
       upcoming,
       completed,
       totalTrending: trending.length,
+      totalSpotlight: spotlight.length,
       totalLatestUpdates: latestUpdates.all.length,
       totalMostViewedToday: mostViewed.today.length,
       totalNewReleases: newReleases.length,
