@@ -3,13 +3,22 @@ import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import env from './src/config/env.js';
-// animekai routes removed
-import miruroHomeRouter from './src/miruro/router/home.js';
-import miruroSearchRouter from './src/miruro/router/search.js';
-import miruroAnimeRouter from './src/miruro/router/anime.js';
-import miruroEpisodesRouter from './src/miruro/router/episodes.js';
-import miruroEpisodeServersRouter from './src/miruro/router/episode-servers.js';
-import miruroEpisodeSourcesRouter from './src/miruro/router/episode-sources.js';
+import animekaiHomeRouter from './src/animekai/router/home.js';
+import animekaiAzlistRouter from './src/animekai/router/azlist.js';
+import animekaiAnimeRouter from './src/animekai/router/anime.js';
+import animekaiSearchRouter from './src/animekai/router/search.js';
+import animekaiSearchAdvancedRouter from './src/animekai/router/search-advanced.js';
+import animekaiSearchSuggestionRouter from './src/animekai/router/search-suggestion.js';
+import animekaiProducerRouter from './src/animekai/router/producer.js';
+import animekaiGenreRouter from './src/animekai/router/genre.js';
+import animekaiCategoryRouter from './src/animekai/router/category.js';
+import animekaiScheduleRouter from './src/animekai/router/schedule.js';
+import animekaiEpisodesRouter from './src/animekai/router/episodes.js';
+import animekaiNextEpisodeRouter from './src/animekai/router/next-episode.js';
+import animekaiEpisodeServersRouter from './src/animekai/router/episode-servers.js';
+import animekaiEpisodeSourcesRouter from './src/animekai/router/streaming-server.js';
+import animekaiProxyRouter from './src/animekai/router/proxy.js';
+import { animekaiEpisodesController } from './src/animekai/controllers/episodes.js';
 
 const app = new Hono();
 
@@ -23,32 +32,55 @@ app.get('/', (c) => {
     message: 'Shirayuki Scrapper API V2',
     version: '2.0.0',
     endpoints: {
-      miruro: {
-        home: '/api/v2/miruro/home',
-        search: '/api/v2/miruro/search?q=one%20piece&genres=Adventure&genres=Action&tags=Acting&format=SPECIAL&status=FINISHED&year=2027&sort=POPULARITY_DESC',
-        animeDetails: '/api/v2/miruro/anime/21',
-        episodes: '/api/v2/miruro/anime/21/episodes',
-        episode: {
-          servers: '/api/v2/miruro/episode/servers?animeEpisodeId=21?ep=1',
-          sources: '/api/v2/miruro/episode/sources?animeEpisodeId=21?ep=1&server=server-1&category=sub',
+      animekai: {
+        home: '/api/v2/animekai/home',
+        azlist: '/api/v2/animekai/azlist/0-9?page=1',
+        animeDetails: '/api/v2/animekai/anime/one-piece-dk6r',
+        animeEpisodes: '/api/v2/animekai/anime/one-piece-dk6r/episodes',
+        search: {
+          basic: '/api/v2/animekai/search?q=one%20piece&page=1',
+          advanced: '/api/v2/animekai/search/advanced?q=one%20piece&page=1',
+          suggestion: '/api/v2/animekai/search/suggestion?q=one',
         },
+        discover: {
+          producer: '/api/v2/animekai/producer/toei-animation?page=1',
+          genre: '/api/v2/animekai/genre/action?page=1',
+          category: '/api/v2/animekai/category/tv?page=1',
+          schedule: '/api/v2/animekai/schedule?date=2026-01-01',
+        },
+        episode: {
+          servers: '/api/v2/animekai/episode/servers?animeEpisodeId=example',
+          sources:
+            '/api/v2/animekai/episode/sources?animeEpisodeId=witch-hat-atelier-3e32&ep=1&server=server-1&category=sub',
+        },
+      },
+      compatibility: {
+        animekaiEpisodesLegacy: '/api/v2/animekai/one-piece-dk6r/episodes',
       },
     },
   });
 });
 
-// animekai routes removed
+// API Routes
+app.route('/api/v2/animekai/home', animekaiHomeRouter);
+app.route('/api/v2/animekai/azlist', animekaiAzlistRouter);
+app.route('/api/v2/animekai/anime', animekaiAnimeRouter);
+app.route('/api/v2/animekai/search', animekaiSearchRouter);
+app.route('/api/v2/animekai/search/advanced', animekaiSearchAdvancedRouter);
+app.route('/api/v2/animekai/search/suggestion', animekaiSearchSuggestionRouter);
+app.route('/api/v2/animekai/producer', animekaiProducerRouter);
+app.route('/api/v2/animekai/genre', animekaiGenreRouter);
+app.route('/api/v2/animekai/category', animekaiCategoryRouter);
+app.route('/api/v2/animekai/schedule', animekaiScheduleRouter);
+app.route('/api/v2/animekai/anime', animekaiEpisodesRouter);
+app.route('/api/v2/animekai/anime', animekaiNextEpisodeRouter);
 
-// Miruro Routes
-app.route('/api/v2/miruro/home', miruroHomeRouter);
-app.route('/api/v2/miruro/search', miruroSearchRouter);
-app.route('/api/v2/miruro/anime', miruroAnimeRouter);
-app.route('/api/v2/miruro/anime', miruroEpisodesRouter);
-app.route('/api/v2/miruro/episode', miruroEpisodeServersRouter);
-app.route('/api/v2/miruro/episode', miruroEpisodeSourcesRouter);
+app.route('/api/v2/animekai/episode', animekaiEpisodeServersRouter);
+app.route('/api/v2/animekai/episode/sources', animekaiEpisodeSourcesRouter);
+app.route('/api/v2/animekai/proxy', animekaiProxyRouter);
 
 // Compatibility alias: supports /api/v2/animekai/:animeId/episodes format.
-// compatibility alias removed
+app.get('/api/v2/animekai/:animeId/episodes', animekaiEpisodesController);
 
 app.notFound((c) => {
   return c.json({
