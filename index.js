@@ -3,7 +3,6 @@ import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import env from './src/config/env.js';
-import hianimHomeRouter from './src/hianime/router/home.js';
 import animekaiHomeRouter from './src/animekai/router/home.js';
 import animekaiAzlistRouter from './src/animekai/router/azlist.js';
 import animekaiAnimeRouter from './src/animekai/router/anime.js';
@@ -33,9 +32,6 @@ app.get('/', (c) => {
     message: 'Shirayuki Scrapper API V2',
     version: '2.0.0',
     endpoints: {
-      hianime: {
-        home: '/api/v2/hianime/home',
-      },
       animekai: {
         home: '/api/v2/animekai/home',
         azlist: '/api/v2/animekai/azlist/0-9?page=1',
@@ -58,15 +54,12 @@ app.get('/', (c) => {
             '/api/v2/animekai/episode/sources?animeEpisodeId=witch-hat-atelier-3e32&ep=1&server=server-1&category=sub',
         },
       },
-      compatibility: {
-        animekaiEpisodesLegacy: '/api/v2/animekai/one-piece-dk6r/episodes',
-      },
     },
   });
 });
 
 // API Routes
-app.route('/api/v2/hianime/home', hianimHomeRouter);
+
 app.route('/api/v2/animekai/home', animekaiHomeRouter);
 app.route('/api/v2/animekai/azlist', animekaiAzlistRouter);
 app.route('/api/v2/animekai/anime', animekaiAnimeRouter);
