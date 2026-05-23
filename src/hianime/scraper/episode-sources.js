@@ -1,5 +1,6 @@
 import { load, axios } from '../../utils/scrapper-deps.js';
 import { resolveMalId, getSkipTimes } from './aniskip.js';
+import cloudscraper from 'cloudscraper';
 
 const HIANIME_BASE_URL = 'https://hianime.ad';
 const DEFAULT_UA =
@@ -135,11 +136,22 @@ const extractTracksFromEmbedUrl = (embedUrl) => {
 };
 
 let browserInstance = null;
+const isVercel = !!process.env.VERCEL || !!process.env.VERCEL_ENV;
+const isServerless = Boolean(
+  process.env.VERCEL ||
+  process.env.VERCEL_ENV ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.NETLIFY ||
+  process.env.CF_PAGES ||
+  process.env.RENDER ||
+  process.env.RAILWAY
+);
 
 async function getBrowser() {
   if (!browserInstance) {
     const puppeteer = (await import('puppeteer')).default;
-    browserInstance = await puppeteer.launch({
+
+    const launchConfig = {
       headless: true,
       args: [
         '--no-sandbox',
@@ -149,55 +161,82 @@ async function getBrowser() {
         '--disable-features=IsolateOrigins,site-per-process,SafeBrowsing',
         '--disable-client-side-phishing-detection',
         '--no-default-browser-check',
+        '--disable-web-resources',
+        '--disable-default-apps',
+        '--disable-translate',
       ],
-    });
+    };
+
+    if (isServerless) {
+      launchConfig.args.push(
+        '--single-process',
+        '--disable-gpu'
+      );
+    }
+
+    browserInstance = await puppeteer.launch(launchConfig);
   }
 
   return browserInstance;
 }
 
 async function resolveEmbedM3u8(watchUrl, embedUrl) {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
+  if (isServerless) {
+    console.log('[resolveEmbedM3u8] In serverless environment, attempting lightweight extraction');
+    return null;
+  }
 
-  await page.setUserAgent(DEFAULT_UA);
-
-  let capturedUrl = null;
-
-  const capturePromise = page.waitForResponse((response) => {
-    const responseUrl = response.url();
-    const isM3u8 = /\.m3u8(\?|$)/i.test(responseUrl);
-    if (isM3u8 && response.status() >= 200 && response.status() < 400) {
-      capturedUrl = responseUrl;
-      return true;
-    }
-    return false;
-  }, { timeout: 60000 });
+  const timeoutMs = 30000;
+  const navigationTimeoutMs = 45000;
 
   try {
-    const hostPageHtml = `<!doctype html><html><head><meta charset="utf-8"><title>host</title></head><body><iframe id="player" src="${embedUrl}" allow="autoplay; encrypted-media" allowfullscreen style="width:100%;height:100%;border:0;"></iframe></body></html>`;
+    const browser = await getBrowser();
+    const page = await browser.newPage();
 
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      if (req.url() === watchUrl) {
-        return req.respond({
-          status: 200,
-          contentType: 'text/html; charset=utf-8',
-          body: hostPageHtml,
-        });
+    await page.setUserAgent(DEFAULT_UA);
+    await page.setDefaultNavigationTimeout(navigationTimeoutMs);
+    await page.setDefaultTimeout(timeoutMs);
+
+    let capturedUrl = null;
+
+    const capturePromise = page.waitForResponse((response) => {
+      const responseUrl = response.url();
+      const isM3u8 = /\.m3u8(\?|$)/i.test(responseUrl);
+      if (isM3u8 && response.status() >= 200 && response.status() < 400) {
+        capturedUrl = responseUrl;
+        return true;
       }
-      req.continue();
-    });
+      return false;
+    }, { timeout: timeoutMs });
 
-    await page.goto(watchUrl, {
-      waitUntil: 'networkidle2',
-      timeout: 90000,
-    });
+    try {
+      const hostPageHtml = `<!doctype html><html><head><meta charset="utf-8"><title>host</title></head><body><iframe id="player" src="${embedUrl}" allow="autoplay; encrypted-media" allowfullscreen style="width:100%;height:100%;border:0;"></iframe></body></html>`;
 
-    await capturePromise;
-    return capturedUrl;
-  } finally {
-    await page.close().catch(() => {});
+      await page.setRequestInterception(true);
+      page.on('request', (req) => {
+        if (req.url() === watchUrl) {
+          return req.respond({
+            status: 200,
+            contentType: 'text/html; charset=utf-8',
+            body: hostPageHtml,
+          });
+        }
+        req.continue();
+      });
+
+      await page.goto(watchUrl, {
+        waitUntil: 'networkidle2',
+        timeout: navigationTimeoutMs,
+      });
+
+      await capturePromise;
+      return capturedUrl;
+    } finally {
+      await page.close().catch(() => {});
+    }
+  } catch (error) {
+    console.error('[resolveEmbedM3u8] Puppeteer error:', error.message);
+    return null;
   }
 }
 
@@ -242,13 +281,26 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
 
   const [m3u8Result, malId] = await Promise.all([
     resolveEmbedM3u8(watchUrl, picked.embed).catch((error) => {
-      console.log('[getHianimeEpisodeSources] Failed to resolve embed m3u8:', error.message);
+      console.error('[getHianimeEpisodeSources] Failed to resolve embed m3u8:', {
+        error: error.message,
+        isServerless,
+        isVercel,
+      });
       return null;
     }),
     resolveMalId(animeId, searchTitle),
   ]);
 
   const m3u8 = m3u8Result;
+  const typeLabel = m3u8 ? 'm3u8' : 'iframe';
+  if (!m3u8) {
+    console.warn('[getHianimeEpisodeSources] Returning fallback iframe URL', {
+      animeId,
+      episodeNumber,
+      isServerless,
+    });
+  }
+
   const { intro, outro } = await getSkipTimes(malId, episodeNumber);
 
   const tracks = extractTracksFromEmbedUrl(picked.embed);
@@ -263,7 +315,7 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
     sources: [
       {
         m3u8: m3u8 || picked.embed,
-        type: m3u8 ? 'm3u8' : 'iframe',
+        type: typeLabel,
         quality: null,
         referer: picked.embed,
         server: picked.nameId || normalizedServer,
