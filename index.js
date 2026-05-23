@@ -30,6 +30,8 @@ import hianimeGenreRouter from './src/hianime/router/genre.js';
 import hianimeCategoryRouter from './src/hianime/router/category.js';
 import hianimeScheduleRouter from './src/hianime/router/schedule.js';
 import hianimeEpisodeServersRouter from './src/hianime/router/episode-servers.js';
+import { renderDashboard } from './src/utils/dashboard.js';
+import { initOfflineDb } from './src/utils/offlineDb.js';
 
 const app = new Hono();
 
@@ -39,56 +41,7 @@ app.use('*', cors());
 
 // Root
 app.get('/', (c) => {
-  return c.json({
-    message: 'Shirayuki Scrapper API V2',
-    version: '2.0.0',
-    endpoints: {
-      animekai: {
-        home: '/api/v2/animekai/home',
-        azlist: '/api/v2/animekai/azlist/0-9?page=1',
-        animeDetails: '/api/v2/animekai/anime/one-piece-dk6r',
-        animeEpisodes: '/api/v2/animekai/anime/one-piece-dk6r/episodes',
-        search: {
-          basic: '/api/v2/animekai/search?q=one%20piece&page=1',
-          advanced: '/api/v2/animekai/search/advanced?q=one%20piece&page=1',
-          suggestion: '/api/v2/animekai/search/suggestion?q=one',
-        },
-        discover: {
-          producer: '/api/v2/animekai/producer/toei-animation?page=1',
-          genre: '/api/v2/animekai/genre/action?page=1',
-          category: '/api/v2/animekai/category/tv?page=1',
-          schedule: '/api/v2/animekai/schedule?date=2026-01-01',
-        },
-        episode: {
-          servers: '/api/v2/animekai/episode/servers?animeEpisodeId=example',
-          sources:
-            '/api/v2/animekai/episode/sources?animeEpisodeId=witch-hat-atelier-3e32&ep=1&server=server-1&category=sub',
-        },
-      },
-      hianime: {
-        home: '/api/v2/hianime/home',
-        azlist: '/api/v2/hianime/azlist/A?page=1',
-        animeDetails: '/api/v2/hianime/anime/one-piece',
-        animeEpisodes: '/api/v2/hianime/anime/one-piece/episodes',
-        nextEpisode: '/api/v2/hianime/anime/one-piece/next-episode',
-        search: {
-          basic: '/api/v2/hianime/search?q=naruto&page=1',
-          advanced: '/api/v2/hianime/search/advanced?q=naruto&type=tv&genres=action&page=1',
-          suggestion: '/api/v2/hianime/search/suggestion?q=naruto',
-        },
-        discover: {
-          genre: '/api/v2/hianime/genre/action?page=1',
-          category: '/api/v2/hianime/category/most-popular?page=1',
-          schedule: '/api/v2/hianime/schedule?date=2026-05-22&timezone=UTC',
-        },
-        episode: {
-          servers: '/api/v2/hianime/episode/servers?animeEpisodeId=one-piece&ep=1',
-          sources:
-            '/api/v2/hianime/episode/sources?animeEpisodeId=one-piece&ep=1&server=hd-1&category=sub',
-        },
-      },
-    },
-  });
+  return c.html(renderDashboard());
 });
 
 // API Routes
@@ -141,6 +94,9 @@ app.onError((err, c) => {
 
 const port = env.PORT;
 console.log(`http://localhost:${port}`);
+
+// Initialize Offline Database Autodownload & Daily Update Check Scheduler
+initOfflineDb();
 
 serve({
   fetch: app.fetch,

@@ -1,4 +1,5 @@
 import { getAnimekaiSearchResultsAdvanced } from '../scraper/search-advanced.js';
+import { resolveBulkAnime } from '../../utils/anilist.js';
 
 export const animekaiSearchAdvancedController = async (c) => {
 	try {
@@ -34,6 +35,9 @@ export const animekaiSearchAdvancedController = async (c) => {
 		});
 
 		const data = await getAnimekaiSearchResultsAdvanced(q, page, filters);
+		if (data?.animes) {
+			data.animes = await resolveBulkAnime(data.animes, q);
+		}
 		return c.json({
 			success: true,
 			data,
