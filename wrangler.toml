@@ -1,0 +1,15 @@
+name = "shirayuki-anime-api"
+main = "src/worker.js"
+compatibility_date = "2026-06-01"
+compatibility_flags = [ "nodejs_compat" ]
+
+[vars]
+NODE_ENV = "production"
+PORT = 8787
+
+[alias]
+"typescript" = "./src/utils/empty.js"
+"puppeteer" = "./src/utils/empty.js"
+"puppeteer-extra" = "./src/utils/empty.js"
+"puppeteer-extra-plugin-stealth" = "./src/utils/empty.js"
+"cloudscraper" = "./src/utils/empty.js"

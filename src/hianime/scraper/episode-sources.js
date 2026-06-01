@@ -1,6 +1,5 @@
 import { load, axios } from '../../utils/scrapper-deps.js';
 import { resolveMalId, getSkipTimes } from './aniskip.js';
-import cloudscraper from 'cloudscraper';
 
 const HIANIME_BASE_URL = 'https://hianime.ad';
 const DEFAULT_UA =
@@ -246,6 +245,7 @@ async function resolveEmbedM3u8(watchUrl, embedUrl) {
 
     // 1) Try cloudscraper first (better chance to bypass CF checks).
     try {
+      const cloudscraper = (await import('cloudscraper')).default;
       const res = await cloudscraper({
         url: embedUrl,
         method: 'GET',

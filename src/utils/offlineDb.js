@@ -10,7 +10,10 @@ const DB_PATH = path.join(process.cwd(), 'anime-offline-database.json');
 const METADATA_PATH = path.join(process.cwd(), 'offline-db-metadata.json');
 const GITHUB_API = 'https://api.github.com/repos/manami-project/anime-offline-database/releases/latest';
 
+const isWorker = typeof globalThis.WebSocketPair !== 'undefined';
+
 const findDatabaseFile = () => {
+  if (isWorker) return null;
   const pathsToCheck = [
     DB_PATH,
     path.join(process.cwd(), '..', 'allanime-api', 'anime-offline-database.json'),
@@ -85,6 +88,10 @@ const buildIndexes = (data) => {
  * Checks for updates on GitHub and downloads the database if a new version is available
  */
 export const checkForUpdates = async () => {
+  if (isWorker) {
+    console.log('[OfflineDB] Skipping update checks in worker environment.');
+    return;
+  }
   console.log('[OfflineDB] Checking for database updates...');
   let metadata = {};
   if (fs.existsSync(METADATA_PATH)) {
@@ -178,6 +185,7 @@ export const initOfflineDb = () => {
 };
 
 export const loadDb = () => {
+  if (isWorker) return false;
   if (isDbLoaded) return true;
 
   let dbPath = findDatabaseFile();

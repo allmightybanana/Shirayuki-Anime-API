@@ -1,6 +1,5 @@
 import { fetchAnimekaiPage } from './_shared.js';
 import { axios } from '../../utils/scrapper-deps.js';
-import cloudscraper from 'cloudscraper';
 
 const ANIMEKAI_BASE_URL = 'https://anikai.to';
 
@@ -57,6 +56,7 @@ async function fetchMediaWithPuppeteer(mediaUrl, referer) {
   if (isServerless) {
     console.log('[fetchMediaWithPuppeteer] Using cloudscraper in serverless environment');
     try {
+      const cloudscraper = (await import('cloudscraper')).default;
       const result = await cloudscraper({
         url: mediaUrl,
         headers: {
