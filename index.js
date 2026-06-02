@@ -30,6 +30,7 @@ import hianimeGenreRouter from './src/hianime/router/genre.js';
 import hianimeCategoryRouter from './src/hianime/router/category.js';
 import hianimeScheduleRouter from './src/hianime/router/schedule.js';
 import hianimeEpisodeServersRouter from './src/hianime/router/episode-servers.js';
+import hianimeProxyRouter from './src/hianime/router/proxy.js';
 import { renderDashboard } from './src/utils/dashboard.js';
 import { initOfflineDb } from './src/utils/offlineDb.js';
 
@@ -73,6 +74,7 @@ app.route('/api/v2/hianime/category', hianimeCategoryRouter);
 app.route('/api/v2/hianime/schedule', hianimeScheduleRouter);
 app.route('/api/v2/hianime/episode', hianimeEpisodeServersRouter);
 app.route('/api/v2/hianime/episode/sources', hianimeEpisodeSourcesRouter);
+app.route('/api/v2/hianime/proxy', hianimeProxyRouter);
 
 // Compatibility alias: supports /api/v2/animekai/:animeId/episodes format.
 app.get('/api/v2/animekai/:animeId/episodes', animekaiEpisodesController);

@@ -13,3 +13,6 @@ PORT = 8787
 "puppeteer-extra" = "./src/utils/empty.js"
 "puppeteer-extra-plugin-stealth" = "./src/utils/empty.js"
 "cloudscraper" = "./src/utils/empty.js"
+
+[observability]
+enabled = false

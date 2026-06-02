@@ -78,7 +78,9 @@ npm run start
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/v2/animekai/search?q=` | Basic search |
+| `GET` | `/api/v2/animekai/search?q=` | Basic keyword search |
+| `GET` | `/api/v2/animekai/search?anilistId=` | Search by AniList ID |
+| `GET` | `/api/v2/animekai/search?malId=` | Search by MAL ID |
 | `GET` | `/api/v2/animekai/search/advanced` | Advanced filters |
 | `GET` | `/api/v2/animekai/search/suggestion` | Autocomplete |
 
@@ -99,6 +101,11 @@ npm run start
 | `GET` | `/api/v2/animekai/episode/sources` | Get video sources |
 | `GET` | `/api/v2/animekai/proxy?url=` | CORS proxy |
 
+> **💡 AniList/MAL ID Support**: The `search`, `episode/servers`, and `episode/sources` endpoints
+> support `anilistId`/`malId` (search) or `provider=anilist|mal` (servers/sources) parameters.
+> This cross-references the [Anime Offline Database](https://github.com/manami-project/anime-offline-database)
+> for accurate season-specific resolution.
+
 ---
 
 ## 💡 Usage Examples
@@ -113,6 +120,17 @@ curl "http://localhost:3000/api/v2/animekai/home"
 curl "http://localhost:3000/api/v2/animekai/search?q=attack%20on%20titan"
 ```
 
+### Search by AniList ID
+```bash
+# Resolves AniList ID to the correct anime (season-specific)
+curl "http://localhost:3000/api/v2/animekai/search?anilistId=163096"
+```
+
+### Search by MAL ID
+```bash
+curl "http://localhost:3000/api/v2/animekai/search?malId=52480"
+```
+
 ### Get Anime Details
 ```bash
 curl "http://localhost:3000/api/v2/animekai/anime/steinsgate-3"
@@ -120,7 +138,18 @@ curl "http://localhost:3000/api/v2/animekai/anime/steinsgate-3"
 
 ### Get Episode Servers
 ```bash
-curl "http://localhost:3000/api/v2/animekai/episode/servers?animeEpisodeId=steinsgate-3?ep=213"
+curl "http://localhost:3000/api/v2/animekai/episode/servers?animeEpisodeId=steinsgate-3&ep=1"
+```
+
+### Get Episode Servers by AniList ID
+```bash
+# Pass provider=anilist to resolve the anime from an AniList ID
+curl "http://localhost:3000/api/v2/animekai/episode/servers?animeEpisodeId=163096&ep=9&provider=anilist"
+```
+
+### Get Streaming Sources by AniList ID
+```bash
+curl "http://localhost:3000/api/v2/animekai/episode/sources?animeEpisodeId=163096&ep=9&provider=anilist&category=sub"
 ```
 
 ### Advanced Search

@@ -1,4 +1,5 @@
 import { getHianimeEpisodeSources } from '../scraper/episode-sources.js';
+import { resolveExternalId } from '../../utils/resolver.js';
 
 const episodeSourcesCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -25,10 +26,11 @@ const setCachedEpisodeSources = (key, value) => {
 export const hianimeEpisodeSourcesController = async (c) => {
   try {
     const startTime = Date.now();
-    const animeEpisodeId = c.req.query('animeEpisodeId');
+    let animeEpisodeId = c.req.query('animeEpisodeId');
     const ep = c.req.query('ep');
     const server = c.req.query('server');
     const category = c.req.query('category');
+    const provider = c.req.query('provider');
 
     if (!animeEpisodeId) {
       return c.json(
@@ -38,6 +40,21 @@ export const hianimeEpisodeSourcesController = async (c) => {
         },
         400
       );
+    }
+
+    // Resolve external IDs (AniList/MAL) to HiAnime anime ID
+    if (provider && (provider === 'anilist' || provider === 'mal')) {
+      const resolvedId = await resolveExternalId(animeEpisodeId, provider, 'hianime');
+      if (!resolvedId) {
+        return c.json(
+          {
+            success: false,
+            error: `Could not resolve ${provider} ID "${animeEpisodeId}" to a HiAnime anime`,
+          },
+          404
+        );
+      }
+      animeEpisodeId = resolvedId;
     }
 
     const cacheKey = [
@@ -60,6 +77,19 @@ export const hianimeEpisodeSourcesController = async (c) => {
     }
 
     const data = await getHianimeEpisodeSources({ animeEpisodeId, ep, server, category });
+
+    // Rewrite m3u8 source URLs to go through the proxy so segments
+    // are PNG-stripped and directly playable in any HLS player.
+    const reqUrl = new URL(c.req.url);
+    const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/v2/hianime/proxy/m3u8?url=`;
+    if (data?.sources) {
+      for (const src of data.sources) {
+        if (src.source && src.type === 'm3u8') {
+          src.source = proxyBase + encodeURIComponent(src.source);
+        }
+      }
+    }
+
     setCachedEpisodeSources(cacheKey, data);
 
     const extractionTimeSec = Number(((Date.now() - startTime) / 1000).toFixed(3));

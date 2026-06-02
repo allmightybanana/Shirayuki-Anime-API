@@ -27,9 +27,90 @@ const getJaccardSimilarity = (str1, str2) => {
   return intersection.size / union.size;
 };
 
-/**
- * Fetch AniList metadata for an external ID (supporting both AniList ID and MAL ID)
- */
+const fetchJikanMetadata = async (malId, anilistId = null) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+  const response = await fetch(`https://api.jikan.moe/v4/anime/${malId}`, {
+    signal: controller.signal
+  });
+  clearTimeout(timeoutId);
+  if (!response.ok) {
+    throw new Error(`Jikan API returned status ${response.status}`);
+  }
+  const json = await response.json();
+  const data = json?.data;
+  if (!data) throw new Error('No data in Jikan response');
+  
+  return {
+    id: anilistId ? parseInt(anilistId) : null,
+    idMal: parseInt(malId),
+    title: {
+      romaji: data.title || null,
+      english: data.title_english || data.title || null,
+      native: data.title_japanese || data.title || null,
+      userPreferred: data.title || null,
+    },
+    synonyms: data.title_synonyms || [],
+    seasonYear: data.year || (data.aired?.from ? new Date(data.aired.from).getFullYear() : null),
+    season: data.season ? data.season.toUpperCase() : null,
+    format: data.type || null,
+    studios: {
+      nodes: (data.studios || []).map(s => ({ name: s.name })),
+    }
+  };
+};
+
+const fetchAniZipData = async (anilistId) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+  const response = await fetch(`https://api.ani.zip/mappings?anilist_id=${anilistId}`, {
+    signal: controller.signal
+  });
+  clearTimeout(timeoutId);
+  if (!response.ok) {
+    throw new Error(`AniZip API returned status ${response.status}`);
+  }
+  return await response.json();
+};
+
+const buildMetaFromAniZip = (aniZipData, anilistId) => {
+  const mappings = aniZipData.mappings || {};
+  const titles = aniZipData.titles || {};
+  
+  const romaji = titles['x-jat'] || titles.en || null;
+  const english = titles.en || null;
+  const native = titles.ja || null;
+  
+  // Extract all distinct titles as synonyms
+  const synonyms = Array.from(new Set(Object.values(titles))).filter(Boolean);
+  
+  // Parse year from first episode airdate if available
+  let seasonYear = null;
+  if (aniZipData.episodes && aniZipData.episodes['1']?.airdate) {
+    const airdate = aniZipData.episodes['1'].airdate;
+    const match = airdate.match(/^\d{4}/);
+    if (match) seasonYear = parseInt(match[0]);
+  }
+  
+  return {
+    id: parseInt(anilistId),
+    idMal: mappings.mal_id ? parseInt(mappings.mal_id) : null,
+    title: {
+      romaji,
+      english,
+      native,
+      userPreferred: english || romaji,
+    },
+    synonyms,
+    seasonYear,
+    season: null,
+    format: mappings.type || null,
+    studios: {
+      nodes: []
+    }
+  };
+};
+
 const fetchAniListMetadata = async (id, provider) => {
   const cacheKey = `anilist:meta:${provider}:${id}`;
   const cached = cache.get(cacheKey);
@@ -69,21 +150,62 @@ const fetchAniListMetadata = async (id, provider) => {
   }
 
   try {
-    const response = await axios.post(
-      ANILIST_GRAPHQL_URL,
-      { query, variables },
-      {
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        timeout: 5000,
-      }
-    );
-    const media = response.data?.data?.Media;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`AniList GraphQL returned status ${response.status}`);
+    }
+
+    const result = await response.json();
+    const media = result?.data?.Media;
     if (media) {
       cache.set(cacheKey, media, 86400); // Cache for 24 hours
       return media;
     }
   } catch (error) {
     console.error(`[Resolver] Failed to fetch AniList metadata for ${provider} ID ${id}:`, error.message);
+    console.log(`[Resolver] Attempting fallback metadata resolution for ${provider} ID ${id}...`);
+
+    try {
+      let fallbackMeta = null;
+      if (provider === 'mal') {
+        fallbackMeta = await fetchJikanMetadata(id);
+      } else if (provider === 'anilist') {
+        const aniZipData = await fetchAniZipData(id);
+        if (aniZipData) {
+          const malId = aniZipData.mappings?.mal_id;
+          if (malId) {
+            try {
+              fallbackMeta = await fetchJikanMetadata(malId, id);
+            } catch (jikanErr) {
+              console.warn(`[Resolver] Fallback Jikan query failed: ${jikanErr.message}. Relying on AniZip metadata.`);
+            }
+          }
+          if (!fallbackMeta) {
+            fallbackMeta = buildMetaFromAniZip(aniZipData, id);
+          }
+        }
+      }
+
+      if (fallbackMeta) {
+        console.log(`[Resolver] Fallback metadata resolved successfully for ${provider} ID ${id}: ${JSON.stringify(fallbackMeta.title)}`);
+        cache.set(cacheKey, fallbackMeta, 86400); // Cache for 24 hours
+        return fallbackMeta;
+      }
+    } catch (fallbackErr) {
+      console.error(`[Resolver] Fallback metadata resolution failed for ${provider} ID ${id}:`, fallbackErr.message);
+    }
   }
   return null;
 };
@@ -218,19 +340,43 @@ const computeMatchScore = (candidate, meta) => {
 /**
  * Resolves an external ID (AniList or MAL) to a Scraper ID
  */
-export const resolveExternalId = async (id, provider, scraperType = 'hianime') => {
+export const resolveExternalId = async (id, provider, scraperType = 'hianime', debugOptions = null) => {
   if (!id) return null;
+  
+  const logDebug = (msg) => {
+    console.log(`[Resolver] ${msg}`);
+    if (debugOptions && Array.isArray(debugOptions.logs)) {
+      debugOptions.logs.push(msg);
+    }
+  };
+
   const cacheKey = `resolved:${scraperType}:${provider}:${id}`;
   const cached = cache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    logDebug(`Found cached resolution: ${cached}`);
+    return cached;
+  }
+
+  logDebug(`Resolving external ${provider} ID: ${id} for ${scraperType}`);
 
   // 1. Fetch metadata from AniList (with offline database fallback)
   let meta = await fetchAniListMetadata(id, provider);
-  if (!meta) {
-    console.log(`[Resolver] AniList GraphQL metadata unavailable. Falling back to offline database for ${provider} ID ${id}...`);
+  if (meta) {
+    logDebug(`Fetched AniList metadata via GraphQL API: ${JSON.stringify(meta.title)}`);
+  } else {
+    logDebug(`AniList GraphQL metadata unavailable. Falling back to offline database...`);
     meta = findMetadataInOfflineDb(id, provider);
+    if (meta) {
+      logDebug(`Found match in offline DB: ${JSON.stringify(meta.title)}`);
+    } else {
+      logDebug(`No match found in offline DB either.`);
+    }
   }
-  if (!meta) return null;
+
+  if (!meta) {
+    logDebug(`Failed to retrieve metadata for ${provider} ID ${id}`);
+    return null;
+  }
 
   // Determine search terms (using English, Romaji, and synonyms)
   const searchTerms = [
@@ -239,12 +385,26 @@ export const resolveExternalId = async (id, provider, scraperType = 'hianime') =
     meta.title?.userPreferred,
   ].filter(Boolean);
 
+  // De-duplicate search terms case-insensitively
+  const uniqueTerms = [];
+  const lowerTerms = new Set();
+  for (const term of searchTerms) {
+    const lower = term.toLowerCase().trim();
+    if (lower && !lowerTerms.has(lower)) {
+      lowerTerms.add(lower);
+      uniqueTerms.push(term);
+    }
+  }
+
+  logDebug(`Search terms determined: ${JSON.stringify(uniqueTerms)}`);
+
   // 2. Search the scraper for candidate items
   const uniqueCandidates = new Map();
 
-  for (const term of searchTerms) {
+  for (const term of uniqueTerms) {
     try {
       let results = [];
+      logDebug(`Querying ${scraperType} scraper for term: "${term}"`);
       if (scraperType === 'hianime') {
         const searchData = await getHianimeSearch({ q: term, page: 1 });
         results = searchData?.results || [];
@@ -252,19 +412,24 @@ export const resolveExternalId = async (id, provider, scraperType = 'hianime') =
         const searchData = await getAnimekaiSearchResults(term, 1);
         results = searchData?.animes || [];
       }
-
+      
+      logDebug(`Scraper search returned ${results.length} candidates for "${term}"`);
       for (const item of results) {
         if (item.id) {
           uniqueCandidates.set(item.id, item);
         }
       }
     } catch (err) {
-      console.error(`[Resolver] Search error for term "${term}":`, err.message);
+      logDebug(`Scraper search error for term "${term}": ${err.message}`);
     }
   }
 
   const candidatesList = Array.from(uniqueCandidates.values());
-  if (!candidatesList.length) return null;
+  logDebug(`Total unique candidates found: ${candidatesList.length}`);
+  if (!candidatesList.length) {
+    logDebug(`No candidates found for any search term.`);
+    return null;
+  }
 
   // 3. Gather full details for top candidates to get premiered, studios, etc.
   const scoredCandidates = [];
@@ -277,16 +442,19 @@ export const resolveExternalId = async (id, provider, scraperType = 'hianime') =
 
     if (scraperType === 'hianime') {
       try {
+        logDebug(`Fetching full details for candidate ID: ${candidate.id}`);
         const details = await getHianimeAnimeDetails({ animeId: candidate.id });
         if (details) {
           fullCandidate = { ...candidate, ...details };
         }
       } catch (err) {
+        logDebug(`Failed to fetch details for candidate ${candidate.id}: ${err.message}`);
         // Fallback to basic candidate if details page fetch fails
       }
     }
 
     const score = computeMatchScore(fullCandidate, meta);
+    logDebug(`Scored candidate "${candidate.title}" (${candidate.id}): ${score.toFixed(3)}`);
     scoredCandidates.push({ id: candidate.id, score, title: candidate.title });
   }
 
@@ -294,6 +462,7 @@ export const resolveExternalId = async (id, provider, scraperType = 'hianime') =
   if (candidatesList.length > 5) {
     for (const candidate of candidatesList.slice(5)) {
       const score = computeMatchScore(candidate, meta);
+      logDebug(`Scored candidate (no details) "${candidate.title}" (${candidate.id}): ${score.toFixed(3)}`);
       scoredCandidates.push({ id: candidate.id, score, title: candidate.title });
     }
   }
@@ -301,14 +470,22 @@ export const resolveExternalId = async (id, provider, scraperType = 'hianime') =
   // Sort by score descending
   scoredCandidates.sort((a, b) => b.score - a.score);
 
-  console.log(`[Resolver] Match scoring for ${provider} ID ${id} (${meta.title?.english || meta.title?.romaji}):`);
-  scoredCandidates.forEach(c => console.log(`  - [${c.score.toFixed(3)}] ${c.title} (${c.id})`));
+  logDebug(`Match scoring ranking:`);
+  scoredCandidates.forEach(c => logDebug(`  - [Score: ${c.score.toFixed(3)}] Title: "${c.title}" (ID: ${c.id})`));
 
   const bestMatch = scoredCandidates[0];
-  // Threshold requirement: 0.55
-  if (bestMatch && bestMatch.score >= 0.55) {
-    cache.set(cacheKey, bestMatch.id, 86400 * 7); // Cache resolved mapping for 7 days
-    return bestMatch.id;
+  const THRESHOLD = 0.55;
+  if (bestMatch) {
+    logDebug(`Best match is "${bestMatch.title}" with score ${bestMatch.score.toFixed(3)}`);
+    if (bestMatch.score >= THRESHOLD) {
+      logDebug(`Score passes threshold ${THRESHOLD}. Caching resolved mapping.`);
+      cache.set(cacheKey, bestMatch.id, 86400 * 7); // Cache resolved mapping for 7 days
+      return bestMatch.id;
+    } else {
+      logDebug(`Score is below threshold ${THRESHOLD}. Rejecting match.`);
+    }
+  } else {
+    logDebug(`No candidates to match.`);
   }
 
   return null;

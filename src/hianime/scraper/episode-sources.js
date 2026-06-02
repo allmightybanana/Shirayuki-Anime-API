@@ -187,6 +187,34 @@ async function resolveEmbedM3u8(watchUrl, embedUrl) {
     return embedUrl;
   }
 
+  // Direct URL construction: extract video ID from embed URL and build m3u8 path.
+  // Pattern: https://{host}/{videoId}?... or https://{host}/e/{videoId}?...
+  //       → https://{host}/public/stream/{videoId}/master.m3u8
+  try {
+    const embedParsed = new URL(embedUrl);
+    const pathParts = embedParsed.pathname.replace(/^\/+|\/+$/g, '').split('/');
+    // Video ID is the last path segment (after /e/ or just /{id})
+    const videoId = pathParts[pathParts.length - 1];
+
+    if (videoId && /^[a-f0-9]{8,}$/i.test(videoId)) {
+      const constructedUrl = `${embedParsed.origin}/public/stream/${videoId}/master.m3u8`;
+      console.log('[resolveEmbedM3u8] Trying constructed m3u8 URL:', constructedUrl);
+
+      const headResp = await fetch(constructedUrl, {
+        method: 'HEAD',
+        headers: { 'User-Agent': DEFAULT_UA },
+      });
+
+      if (headResp.ok) {
+        console.log('[resolveEmbedM3u8] Constructed m3u8 URL is valid');
+        return constructedUrl;
+      }
+      console.log('[resolveEmbedM3u8] Constructed URL returned', headResp.status);
+    }
+  } catch (err) {
+    console.log('[resolveEmbedM3u8] Direct URL construction failed:', err.message);
+  }
+
   if (isServerless) {
     console.log('[resolveEmbedM3u8] In serverless environment, attempting lightweight extraction');
 
@@ -370,32 +398,59 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
     throw new Error('Requested Hianime server is unavailable');
   }
 
+  const isHdServer = picked.nameId === 'hd-1';
+
   const [m3u8Result, malId] = await Promise.all([
-    resolveEmbedM3u8(watchUrl, picked.embed).catch((error) => {
-      console.error('[getHianimeEpisodeSources] Failed to resolve embed m3u8:', {
-        error: error.message,
-        isServerless,
-        isVercel,
-      });
-      return null;
-    }),
+    isHdServer
+      ? resolveEmbedM3u8(watchUrl, picked.embed).catch((error) => {
+          console.error('[getHianimeEpisodeSources] Failed to resolve embed m3u8:', {
+            error: error.message,
+            isServerless,
+            isVercel,
+          });
+          return null;
+        })
+      : Promise.resolve(null),
     resolveMalId(animeId, searchTitle),
   ]);
-
-  const m3u8 = m3u8Result;
-  const typeLabel = m3u8 ? 'm3u8' : 'iframe';
-  if (!m3u8) {
-    console.warn('[getHianimeEpisodeSources] Returning fallback iframe URL', {
-      animeId,
-      episodeNumber,
-      isServerless,
-    });
-  }
 
   const { intro, outro } = await getSkipTimes(malId, episodeNumber);
 
   const tracks = extractTracksFromEmbedUrl(picked.embed);
 
+  // For hd-1 / hd-2: return m3u8 direct stream
+  if (isHdServer) {
+    const m3u8 = m3u8Result;
+    if (!m3u8) {
+      throw new Error(
+        'Failed to extract m3u8 streaming URL. The embed player could not be resolved to a direct stream.'
+      );
+    }
+
+    return {
+      animeId,
+      title,
+      episode: episodeNumber,
+      episodeSlug: `ep-${episodeNumber}`,
+      sourcePage: watchUrl,
+      malId: malId || null,
+      sources: [
+        {
+          source: m3u8,
+          type: 'm3u8',
+          quality: null,
+          referer: picked.embed,
+          server: picked.nameId || normalizedServer,
+          category: normalizedCategory,
+        },
+      ],
+      tracks,
+      intro,
+      outro,
+    };
+  }
+
+  // For other servers: return the embed URL directly
   return {
     animeId,
     title,
@@ -405,13 +460,12 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
     malId: malId || null,
     sources: [
       {
-        m3u8: m3u8 || picked.embed,
-        type: typeLabel,
+        source: picked.embed,
+        type: 'iframe',
         quality: null,
         referer: picked.embed,
         server: picked.nameId || normalizedServer,
         category: normalizedCategory,
-        embed: picked.embed,
       },
     ],
     tracks,
