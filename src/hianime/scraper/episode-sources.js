@@ -134,6 +134,75 @@ const extractTracksFromEmbedUrl = (embedUrl) => {
   return tracks;
 };
 
+const extractFirstM3u8 = (text) => {
+  if (!text || typeof text !== 'string') return null;
+
+  const match = text.match(/https?:\/\/[^\s"'<>]+\.m3u8(?:\?[^\s"'<>]*)?/i);
+  return match ? match[0] : null;
+};
+
+const tryExtractM3u8FromPayload = (payload) => {
+  if (!payload) return null;
+
+  if (typeof payload === 'string') {
+    return extractFirstM3u8(payload);
+  }
+
+  if (typeof payload === 'object') {
+    const direct =
+      payload?.file ||
+      payload?.url ||
+      payload?.source ||
+      payload?.src ||
+      payload?.m3u8 ||
+      null;
+
+    if (typeof direct === 'string' && /\.m3u8(\?|$)/i.test(direct)) {
+      return direct;
+    }
+
+    if (Array.isArray(payload?.sources)) {
+      const fromSources = payload.sources.find(
+        (s) =>
+          (typeof s?.file === 'string' && /\.m3u8(\?|$)/i.test(s.file)) ||
+          (typeof s?.url === 'string' && /\.m3u8(\?|$)/i.test(s.url)) ||
+          (typeof s?.src === 'string' && /\.m3u8(\?|$)/i.test(s.src))
+      );
+
+      if (fromSources?.file) return fromSources.file;
+      if (fromSources?.url) return fromSources.url;
+      if (fromSources?.src) return fromSources.src;
+    }
+  }
+
+  return null;
+};
+
+const fetchEmbedPageM3u8 = async (watchUrl, embedUrl) => {
+  const headers = {
+    'User-Agent': DEFAULT_UA,
+    Accept: 'text/html,application/json,application/javascript,*/*',
+    Referer: watchUrl,
+    Origin: HIANIME_BASE_URL,
+  };
+
+  try {
+    const res = await axios.get(embedUrl, {
+      proxy: false,
+      timeout: 20000,
+      headers,
+    });
+
+    return tryExtractM3u8FromPayload(res?.data);
+  } catch (error) {
+    console.log('[resolveEmbedM3u8] axios extraction failed:', error.message);
+  }
+
+  return null;
+};
+
+const isHlsResolvableServer = (nameId) => /^hd-\d+$/i.test(String(nameId || ''));
+
 let browserInstance = null;
 const isVercel = !!process.env.VERCEL || !!process.env.VERCEL_ENV;
 const isServerless = Boolean(
@@ -215,54 +284,11 @@ async function resolveEmbedM3u8(watchUrl, embedUrl) {
     console.log('[resolveEmbedM3u8] Direct URL construction failed:', err.message);
   }
 
+  const embedPageM3u8 = await fetchEmbedPageM3u8(watchUrl, embedUrl);
+  if (embedPageM3u8) return embedPageM3u8;
+
   if (isServerless) {
-    console.log('[resolveEmbedM3u8] In serverless environment, attempting lightweight extraction');
-
-    // Vercel free tier cannot reliably run Chromium/Puppeteer for this route,
-    // so attempt to resolve m3u8 directly from embed HTML/script payloads.
-    const extractFirstM3u8 = (text) => {
-      if (!text || typeof text !== 'string') return null;
-
-      const match = text.match(/https?:\/\/[^\s"'<>]+\.m3u8(?:\?[^\s"'<>]*)?/i);
-      return match ? match[0] : null;
-    };
-
-    const tryExtractFromResponse = (payload) => {
-      if (!payload) return null;
-
-      if (typeof payload === 'string') {
-        return extractFirstM3u8(payload);
-      }
-
-      if (typeof payload === 'object') {
-        const direct =
-          payload?.file ||
-          payload?.url ||
-          payload?.source ||
-          payload?.src ||
-          payload?.m3u8 ||
-          null;
-
-        if (typeof direct === 'string' && /\.m3u8(\?|$)/i.test(direct)) {
-          return direct;
-        }
-
-        if (Array.isArray(payload?.sources)) {
-          const fromSources = payload.sources.find(
-            (s) =>
-              (typeof s?.file === 'string' && /\.m3u8(\?|$)/i.test(s.file)) ||
-              (typeof s?.url === 'string' && /\.m3u8(\?|$)/i.test(s.url)) ||
-              (typeof s?.src === 'string' && /\.m3u8(\?|$)/i.test(s.src))
-          );
-
-          if (fromSources?.file) return fromSources.file;
-          if (fromSources?.url) return fromSources.url;
-          if (fromSources?.src) return fromSources.src;
-        }
-      }
-
-      return null;
-    };
+    console.log('[resolveEmbedM3u8] In serverless environment, attempting cloudscraper extraction');
 
     const headers = {
       'User-Agent': DEFAULT_UA,
@@ -282,24 +308,10 @@ async function resolveEmbedM3u8(watchUrl, embedUrl) {
         challengeTimeout: 20000,
       });
 
-      const extracted = tryExtractFromResponse(res);
+      const extracted = tryExtractM3u8FromPayload(res);
       if (extracted) return extracted;
     } catch (error) {
       console.log('[resolveEmbedM3u8] cloudscraper extraction failed:', error.message);
-    }
-
-    // 2) Fallback to axios and parse returned HTML/JSON for any m3u8 links.
-    try {
-      const res = await axios.get(embedUrl, {
-        proxy: false,
-        timeout: 20000,
-        headers,
-      });
-
-      const extracted = tryExtractFromResponse(res?.data);
-      if (extracted) return extracted;
-    } catch (error) {
-      console.log('[resolveEmbedM3u8] axios extraction failed:', error.message);
     }
 
     return null;
@@ -398,10 +410,10 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
     throw new Error('Requested Hianime server is unavailable');
   }
 
-  const isHdServer = picked.nameId === 'hd-1';
+  const shouldResolveHls = isHlsResolvableServer(picked.nameId);
 
   const [m3u8Result, malId] = await Promise.all([
-    isHdServer
+    shouldResolveHls
       ? resolveEmbedM3u8(watchUrl, picked.embed).catch((error) => {
           console.error('[getHianimeEpisodeSources] Failed to resolve embed m3u8:', {
             error: error.message,
@@ -418,8 +430,8 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
 
   const tracks = extractTracksFromEmbedUrl(picked.embed);
 
-  // For hd-1 / hd-2: return m3u8 direct stream
-  if (isHdServer) {
+  // For HD servers: return m3u8 direct stream
+  if (shouldResolveHls) {
     const m3u8 = m3u8Result;
     if (!m3u8) {
       throw new Error(
