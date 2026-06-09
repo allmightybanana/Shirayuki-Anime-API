@@ -5,8 +5,6 @@ const HIANIME_BASE_URL = 'https://hianime.ad';
 const DEFAULT_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-const CATEGORY_TAB = { sub: 'tab_1', dub: 'tab_2', hsub: 'tab_0' };
-
 const normalizeAnimeId = (animeEpisodeId) => {
   if (!animeEpisodeId) return null;
 
@@ -57,8 +55,6 @@ const parseServerList = ($, category) => {
   const block = $(`.player-servers .ps_-block[data-id="${category}"]`).first();
   if (!block.length) return [];
 
-  const tab = CATEGORY_TAB[category] || null;
-
   return block
     .find('a.server-video')
     .map((_, el) => {
@@ -74,7 +70,7 @@ const parseServerList = ($, category) => {
       };
     })
     .get()
-    .filter((s) => s.embed && (!tab || s.tab === tab));
+    .filter((s) => s.embed);
 };
 
 const pickServer = (servers, requestedServer) => {
