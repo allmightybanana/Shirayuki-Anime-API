@@ -1,3 +1,14 @@
+---
+title: Shirayuki Anime API
+emoji: 🌸
+colorFrom: pink
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+license: isc
+---
+
 <p align="center">
   <a href="https://github.com/Anandadevnath/Shirayuki-Scrapper-API-V2"><img src="https://img.shields.io/github/stars/Anandadevnath/Shirayuki-Scrapper-API-V2?style=social" alt="Stars"></a>
   <a href="https://github.com/Anandadevnath/Shirayuki-Scrapper-API-V2/network/members"><img src="https://img.shields.io/github/forks/Anandadevnath/Shirayuki-Scrapper-API-V2?style=social" alt="Forks"></a>
@@ -59,16 +70,6 @@ npm install
 npm run start
 
 # Server runs at → http://localhost:3000/api/v2/animekai
-```
-
-### 🐳 Docker Deployment
-
-```bash
-# Build the Docker image
-docker build -t shirayuki-anime-api .
-
-# Run the container (default port 7860)
-docker run -d -p 7860:7860 --name shirayuki-api shirayuki-anime-api
 ```
 
 ---
