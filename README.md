@@ -61,6 +61,16 @@ npm run start
 # Server runs at → http://localhost:3000/api/v2/animekai
 ```
 
+### 🐳 Docker Deployment
+
+```bash
+# Build the Docker image
+docker build -t shirayuki-anime-api .
+
+# Run the container (default port 7860)
+docker run -d -p 7860:7860 --name shirayuki-api shirayuki-anime-api
+```
+
 ---
 
 ## 📡 API Endpoints
