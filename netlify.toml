@@ -11,3 +11,6 @@
   to = "/.netlify/functions/api"
   status = 200
   force = true
+
+[dev]
+  port = 8888
