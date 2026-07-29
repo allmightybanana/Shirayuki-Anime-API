@@ -1,10 +1,4 @@
-let handlerInstance = null;
+import { handle } from 'hono/netlify';
+import app from '../../index-worker.js';
 
-exports.handler = async (event, context) => {
-  if (!handlerInstance) {
-    const { handle } = await import('hono/netlify');
-    const { default: app } = await import('../../index-worker.js');
-    handlerInstance = handle(app);
-  }
-  return handlerInstance(event, context);
-};
+export const handler = handle(app);
