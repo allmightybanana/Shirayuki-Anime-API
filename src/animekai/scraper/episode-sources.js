@@ -1,17 +1,9 @@
 import { fetchAnimekaiPage } from './_shared.js';
 import { axios } from '../../utils/scrapper-deps.js';
+import { getBrowserInstance, isServerless } from '../../utils/browser.js';
 
 const ANIMEKAI_BASE_URL = 'https://anikai.to';
 
-// Detect serverless environment (Vercel, AWS Lambda, etc.)
-const isServerless = Boolean(
-  process.env.VERCEL ||
-  process.env.AWS_LAMBDA_FUNCTION_NAME ||
-  process.env.NETLIFY ||
-  process.env.CF_PAGES ||
-  process.env.RENDER ||
-  process.env.RAILWAY
-);
 const ANIMEKAI_EPISODES_URL = `${ANIMEKAI_BASE_URL}/ajax/episodes/list`;
 const ANIMEKAI_SERVERS_URL = `${ANIMEKAI_BASE_URL}/ajax/links/list`;
 const ANIMEKAI_LINKS_VIEW_URL = `${ANIMEKAI_BASE_URL}/ajax/links/view`;
@@ -24,30 +16,8 @@ const DEFAULT_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, l
 
 // ─── Puppeteer for Cloudflare bypass ───────────────────────────────────────────
 
-let browserInstance = null;
-
 async function getBrowser() {
-  if (!browserInstance) {
-    const puppeteer = await import('puppeteer');
-    const puppeteerExtra = (await import('puppeteer-extra')).default;
-    const stealth = (await import('puppeteer-extra-plugin-stealth')).default;
-    
-    puppeteerExtra.use(stealth());
-    
-    browserInstance = await puppeteerExtra.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--window-size=1920,1080',
-      ],
-    });
-  }
-  return browserInstance;
+  return await getBrowserInstance({ useStealth: true });
 }
 
 async function fetchMediaWithPuppeteer(mediaUrl, referer) {

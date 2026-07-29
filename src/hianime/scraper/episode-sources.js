@@ -1,5 +1,6 @@
 import { load, axios } from '../../utils/scrapper-deps.js';
 import { resolveMalId, getSkipTimes } from './aniskip.js';
+import { getBrowserInstance, isServerless } from '../../utils/browser.js';
 
 const HIANIME_BASE_URL = 'https://hianime.ad';
 const DEFAULT_UA =
@@ -199,49 +200,8 @@ const fetchEmbedPageM3u8 = async (watchUrl, embedUrl) => {
 
 const isHlsResolvableServer = (nameId) => /^hd-\d+$/i.test(String(nameId || ''));
 
-let browserInstance = null;
-const isVercel = !!process.env.VERCEL || !!process.env.VERCEL_ENV;
-const isServerless = Boolean(
-  process.env.VERCEL ||
-  process.env.VERCEL_ENV ||
-  process.env.AWS_LAMBDA_FUNCTION_NAME ||
-  process.env.NETLIFY ||
-  process.env.CF_PAGES ||
-  process.env.RENDER ||
-  process.env.RAILWAY
-);
-
 async function getBrowser() {
-  if (!browserInstance) {
-    const puppeteer = (await import('puppeteer')).default;
-
-    const launchConfig = {
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-features=IsolateOrigins,site-per-process,SafeBrowsing',
-        '--disable-client-side-phishing-detection',
-        '--no-default-browser-check',
-        '--disable-web-resources',
-        '--disable-default-apps',
-        '--disable-translate',
-      ],
-    };
-
-    if (isServerless) {
-      launchConfig.args.push(
-        '--single-process',
-        '--disable-gpu'
-      );
-    }
-
-    browserInstance = await puppeteer.launch(launchConfig);
-  }
-
-  return browserInstance;
+  return await getBrowserInstance({ useStealth: false });
 }
 
 async function resolveEmbedM3u8(watchUrl, embedUrl) {
@@ -252,7 +212,6 @@ async function resolveEmbedM3u8(watchUrl, embedUrl) {
     return embedUrl;
   }
 
-  // Direct URL construction: extract video ID from embed URL and build m3u8 path.
   // Pattern: https://{host}/{videoId}?... or https://{host}/e/{videoId}?...
   //       → https://{host}/public/stream/{videoId}/master.m3u8
   try {
