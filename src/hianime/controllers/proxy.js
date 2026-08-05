@@ -1,24 +1,24 @@
+import { Buffer } from 'node:buffer';
+
 const DEFAULT_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 // PNG IEND marker: 49 45 4E 44 AE 42 60 82
-const PNG_IEND = new Uint8Array([0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+const PNG_IEND = Buffer.from([0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
 
 /**
- * Find the PNG IEND marker in a Uint8Array and return the offset right after it.
+ * Find the PNG IEND marker in a Uint8Array/Buffer and return the offset right after it.
  * Returns -1 if not found.
  */
 function findIendOffset(buf) {
-  const len = PNG_IEND.length;
-  for (let i = 0; i <= buf.length - len; i++) {
-    let match = true;
-    for (let j = 0; j < len; j++) {
-      if (buf[i + j] !== PNG_IEND[j]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) return i + len;
+  // PNG headers and fake metadata are always within the first 128KB.
+  // Limiting search to 128KB and using native Buffer.indexOf avoids 
+  // scanning multi-megabyte TS segments in pure JS, which exceeds Cloudflare's 10ms Free CPU limit.
+  const searchLimit = Math.min(buf.length, 128 * 1024);
+  const searchBuf = Buffer.from(buf.buffer, buf.byteOffset, searchLimit);
+  const idx = searchBuf.indexOf(PNG_IEND);
+  if (idx !== -1) {
+    return idx + PNG_IEND.length;
   }
   return -1;
 }

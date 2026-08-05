@@ -12,9 +12,10 @@ export const animekaiProxyController = async (c) => {
     }
 
     const response = await fetch(url);
-    const data = await response.text();
-
-    return c.text(data, response.status);
+    return new Response(response.body, {
+      status: response.status,
+      headers: response.headers,
+    });
   } catch (error) {
     return c.json(
       {

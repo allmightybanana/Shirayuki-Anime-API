@@ -6,3 +6,5 @@ dist/
 save.txt
 .wrangler/
 anime-offline-database.json
+# Local Netlify folder
+.netlify
