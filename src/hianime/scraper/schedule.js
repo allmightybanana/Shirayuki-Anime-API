@@ -1,5 +1,6 @@
 import {
   HIANIME_BASE_URL,
+  fetchApiJson,
   fetchPage,
   parseNumber,
   getAnimeId,
@@ -23,6 +24,37 @@ export const getHianimeSchedule = async ({ date, timezone } = {}) => {
   const targetDate = formatDate(date) || todayUTC();
   const today = todayUTC();
   const zone = String(timezone || 'UTC').trim() || 'UTC';
+
+  try {
+    const homeData = await fetchApiJson('/home');
+    const airingList = homeData?.currentlyAiring?.animes || homeData?.popular?.animes || [];
+
+    if (airingList.length > 0) {
+      const results = airingList.map((anime) => {
+        const slug = anime.slug || (Array.isArray(anime.slugs) ? anime.slugs[0] : null) || anime._id;
+        return {
+          id: slug,
+          title: anime.title || anime.English || null,
+          jname: anime.Japanese || null,
+          ename: anime.English || null,
+          href: `/anime/${slug}`,
+          url: `${HIANIME_BASE_URL}/anime/${slug}`,
+          episodeNumber: parseNumber(anime.totalEpisodes) || 1,
+          airingTime: anime.Broadcast || null,
+          time: anime.Broadcast || null,
+        };
+      }).filter((item) => item.id);
+
+      return {
+        source: `${HIANIME_BASE_URL}/schedule`,
+        date: targetDate,
+        timezone: zone,
+        results,
+      };
+    }
+  } catch (apiErr) {
+    console.error('[getHianimeSchedule] API failed, falling back to HTML fetch:', apiErr.message);
+  }
 
   const { url, $ } = await fetchPage('/ajax/schedule', {
     searchParams: { dates: targetDate, zone, date_today: today },

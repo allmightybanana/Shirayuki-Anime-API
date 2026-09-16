@@ -1,8 +1,9 @@
 import { load, axios } from '../../utils/scrapper-deps.js';
 import { resolveMalId, getSkipTimes } from './aniskip.js';
 import { getBrowserInstance, isServerless } from '../../utils/browser.js';
+import { HIANIME_BASE_URL } from './_shared.js';
+import { getHianimeEpisodeServers } from './episode-servers.js';
 
-const HIANIME_BASE_URL = 'https://hianime.ad';
 const DEFAULT_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -272,8 +273,8 @@ async function resolveEmbedM3u8(watchUrl, embedUrl) {
     return null;
   }
 
-  const timeoutMs = 30000;
-  const navigationTimeoutMs = 45000;
+  const timeoutMs = 25000;
+  const navigationTimeoutMs = 35000;
 
   try {
     const browser = await getBrowser();
@@ -284,16 +285,23 @@ async function resolveEmbedM3u8(watchUrl, embedUrl) {
     await page.setDefaultTimeout(timeoutMs);
 
     let capturedUrl = null;
+    let resolveCapture = null;
+    const capturePromise = new Promise((resolve) => {
+      resolveCapture = resolve;
+    });
 
-    const capturePromise = page.waitForResponse((response) => {
+    page.on('response', (response) => {
       const responseUrl = response.url();
-      const isM3u8 = /\.m3u8(\?|$)/i.test(responseUrl);
-      if (isM3u8 && response.status() >= 200 && response.status() < 400) {
+      if (
+        /\.m3u8(\?|$)/i.test(responseUrl) &&
+        !responseUrl.includes('ping.gif') &&
+        response.status() >= 200 &&
+        response.status() < 400
+      ) {
         capturedUrl = responseUrl;
-        return true;
+        if (resolveCapture) resolveCapture(responseUrl);
       }
-      return false;
-    }, { timeout: timeoutMs });
+    });
 
     try {
       const hostPageHtml = `<!doctype html><html><head><meta charset="utf-8"><title>host</title></head><body><iframe id="player" src="${embedUrl}" allow="autoplay; encrypted-media" allowfullscreen style="width:100%;height:100%;border:0;"></iframe></body></html>`;
@@ -315,7 +323,8 @@ async function resolveEmbedM3u8(watchUrl, embedUrl) {
         timeout: navigationTimeoutMs,
       });
 
-      await capturePromise;
+      const timerPromise = new Promise((resolve) => setTimeout(() => resolve(null), 8000));
+      await Promise.race([capturePromise, timerPromise]);
       return capturedUrl;
     } finally {
       await page.close().catch(() => {});
@@ -338,29 +347,13 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
 
   const watchUrl = `${HIANIME_BASE_URL}/watch/${animeId}/ep-${episodeNumber}`;
 
-  const watchResp = await axios.get(watchUrl, {
-    proxy: false,
-    timeout: 20000,
-    headers: pageHeaders(HIANIME_BASE_URL),
-  });
-
-  const watchHtml = String(watchResp?.data || '');
-  if (!watchHtml) {
-    throw new Error('Hianime watch page returned empty body');
-  }
-
-  const $watch = load(watchHtml);
-  const title = $watch('title').first().text().trim() || null;
-  const dTitleEl = $watch('.d-title').first();
-  const searchTitle =
-    dTitleEl.attr('data-jp') || dTitleEl.attr('data-en') || dTitleEl.text().trim() || null;
-
-  const servers = parseServerList($watch, normalizedCategory);
-  if (!servers.length) {
+  const serverData = await getHianimeEpisodeServers({ animeEpisodeId: animeId, ep: episodeNumber });
+  const serverList = serverData?.servers?.[normalizedCategory] || [];
+  if (!serverList.length) {
     throw new Error(`No ${normalizedCategory.toUpperCase()} servers available for this episode`);
   }
 
-  const picked = pickServer(servers, normalizedServer);
+  const picked = pickServer(serverList, normalizedServer);
   if (!picked?.embed) {
     throw new Error('Requested Hianime server is unavailable');
   }
@@ -370,40 +363,29 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
   const [m3u8Result, malId] = await Promise.all([
     shouldResolveHls
       ? resolveEmbedM3u8(watchUrl, picked.embed).catch((error) => {
-          console.error('[getHianimeEpisodeSources] Failed to resolve embed m3u8:', {
-            error: error.message,
-            isServerless,
-            isVercel,
-          });
+          console.error('[getHianimeEpisodeSources] Failed to resolve embed m3u8:', error.message);
           return null;
         })
       : Promise.resolve(null),
-    resolveMalId(animeId, searchTitle),
+    resolveMalId(animeId, animeId.replace(/-/g, ' ')).catch(() => null),
   ]);
 
-  const { intro, outro } = await getSkipTimes(malId, episodeNumber);
+  const { intro, outro } = await getSkipTimes(malId, episodeNumber).catch(() => ({ intro: null, outro: null }));
 
   const tracks = extractTracksFromEmbedUrl(picked.embed);
 
-  // For HD servers: return m3u8 direct stream
-  if (shouldResolveHls) {
-    const m3u8 = m3u8Result;
-    if (!m3u8) {
-      throw new Error(
-        'Failed to extract m3u8 streaming URL. The embed player could not be resolved to a direct stream.'
-      );
-    }
-
+  // If HLS direct stream resolution succeeded, return m3u8
+  if (m3u8Result) {
     return {
       animeId,
-      title,
+      title: serverData?.animeId || animeId,
       episode: episodeNumber,
       episodeSlug: `ep-${episodeNumber}`,
       sourcePage: watchUrl,
       malId: malId || null,
       sources: [
         {
-          source: m3u8,
+          source: m3u8Result,
           type: 'm3u8',
           quality: null,
           referer: picked.embed,
@@ -417,10 +399,10 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
     };
   }
 
-  // For other servers: return the embed URL directly
+  // Fallback to embed iframe URL if direct HLS could not be extracted
   return {
     animeId,
-    title,
+    title: serverData?.animeId || animeId,
     episode: episodeNumber,
     episodeSlug: `ep-${episodeNumber}`,
     sourcePage: watchUrl,

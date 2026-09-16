@@ -85,7 +85,8 @@ export const hianimeEpisodeSourcesController = async (c) => {
     if (data?.sources) {
       for (const src of data.sources) {
         if (src.source && src.type === 'm3u8') {
-          src.source = proxyBase + encodeURIComponent(src.source);
+          const refererParam = src.referer ? `&referer=${encodeURIComponent(src.referer)}` : '';
+          src.source = proxyBase + encodeURIComponent(src.source) + refererParam;
         }
       }
     }

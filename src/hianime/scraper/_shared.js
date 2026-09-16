@@ -1,8 +1,42 @@
 import { load, axios } from '../../utils/scrapper-deps.js';
 
-export const HIANIME_BASE_URL = 'https://hianime.ad';
+export const HIANIME_BASE_URL = 'https://hianimes.se';
+export const HIANIME_API_URLS = [
+  'https://animehot.cc/api',
+  'https://anitv.cfd/api',
+];
 export const DEFAULT_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+export const fetchApiJson = async (endpoint, { method = 'GET', data = null, params = null } = {}) => {
+  let lastError = null;
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+
+  for (const baseUrl of HIANIME_API_URLS) {
+    try {
+      const url = `${baseUrl}${path}`;
+      const resp = await axios({
+        url,
+        method,
+        data,
+        params,
+        timeout: 15000,
+        headers: {
+          'User-Agent': DEFAULT_UA,
+          'Accept': 'application/json, text/plain, */*',
+          'Origin': HIANIME_BASE_URL,
+          'Referer': `${HIANIME_BASE_URL}/`,
+        },
+      });
+      if (resp?.data) {
+        return resp.data;
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error(`Failed to fetch from HiAnime API: ${endpoint}`);
+};
 
 export const parseNumber = (value) => {
   if (value === null || value === undefined) return null;

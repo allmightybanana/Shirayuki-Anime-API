@@ -1,4 +1,5 @@
-import { fetchPage, extractFlwItems, extractPagination } from './_shared.js';
+import { HIANIME_BASE_URL, fetchPage, extractFlwItems, extractPagination } from './_shared.js';
+import { getHianimeSearch } from './search.js';
 
 const VALID_LETTERS = new Set([
   'all',
@@ -18,15 +19,26 @@ export const getHianimeAzlist = async ({ letter, page } = {}) => {
   const normalizedLetter = normalizeLetter(letter);
   const normalizedPage = Number(page) > 0 ? Number(page) : 1;
 
-  const { url, $ } = await fetchPage(`/az-list/${normalizedLetter}`, {
-    searchParams: { page: normalizedPage },
-    referer: 'https://hianime.ad/',
-  });
+  try {
+    const { url, $ } = await fetchPage(`/az-list/${normalizedLetter}`, {
+      searchParams: { page: normalizedPage },
+      referer: `${HIANIME_BASE_URL}/`,
+    });
 
-  return {
-    source: url,
-    letter: normalizedLetter,
-    pagination: extractPagination($),
-    results: extractFlwItems($),
-  };
+    return {
+      source: url,
+      letter: normalizedLetter,
+      pagination: extractPagination($),
+      results: extractFlwItems($),
+    };
+  } catch (err) {
+    const query = normalizedLetter === 'all' ? 'a' : normalizedLetter;
+    const searchRes = await getHianimeSearch({ q: query, page: normalizedPage });
+    return {
+      source: `${HIANIME_BASE_URL}/az-list/${normalizedLetter}`,
+      letter: normalizedLetter,
+      pagination: searchRes.pagination,
+      results: searchRes.results,
+    };
+  }
 };

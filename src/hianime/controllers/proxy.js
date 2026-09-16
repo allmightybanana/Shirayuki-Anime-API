@@ -40,9 +40,12 @@ export const hianimeM3u8ProxyController = async (c) => {
       return c.json({ success: false, error: 'url query parameter is required' }, 400);
     }
 
+    const referer = c.req.query('referer') || c.req.header('referer') || 'https://zokoanime.video/';
+
     const resp = await fetch(url, {
       headers: {
         'User-Agent': DEFAULT_UA,
+        Referer: referer,
         Accept: '*/*',
       },
     });
@@ -61,6 +64,7 @@ export const hianimeM3u8ProxyController = async (c) => {
 
     // Build the proxy base for TS segments
     const reqUrl = new URL(c.req.url);
+    const refererParam = referer ? `&referer=${encodeURIComponent(referer)}` : '';
     const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/v2/hianime/proxy/ts?url=`;
 
     // Rewrite segment URLs
@@ -74,7 +78,7 @@ export const hianimeM3u8ProxyController = async (c) => {
         if (trimmed.includes('URI="')) {
           return trimmed.replace(/URI="([^"]+)"/, (_, uri) => {
             const absUri = uri.startsWith('http') ? uri : baseUrl + uri;
-            return `URI="${proxyBase}${encodeURIComponent(absUri)}"`;
+            return `URI="${proxyBase}${encodeURIComponent(absUri)}${refererParam}"`;
           });
         }
         return line;
@@ -86,10 +90,10 @@ export const hianimeM3u8ProxyController = async (c) => {
       // Sub-playlists (.m3u8) should go through the m3u8 proxy, not the TS proxy
       if (absUrl.endsWith('.m3u8') || absUrl.includes('.m3u8?')) {
         const m3u8ProxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/v2/hianime/proxy/m3u8?url=`;
-        return m3u8ProxyBase + encodeURIComponent(absUrl);
+        return `${m3u8ProxyBase}${encodeURIComponent(absUrl)}${refererParam}`;
       }
 
-      return proxyBase + encodeURIComponent(absUrl);
+      return `${proxyBase}${encodeURIComponent(absUrl)}${refererParam}`;
     });
 
     return c.text(rewritten.join('\n'), 200, {
@@ -119,9 +123,12 @@ export const hianimeTsProxyController = async (c) => {
       return c.json({ success: false, error: 'url query parameter is required' }, 400);
     }
 
+    const referer = c.req.query('referer') || c.req.header('referer') || 'https://zokoanime.video/';
+
     const resp = await fetch(url, {
       headers: {
         'User-Agent': DEFAULT_UA,
+        Referer: referer,
         Accept: '*/*',
       },
     });

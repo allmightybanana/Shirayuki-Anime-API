@@ -1,4 +1,5 @@
-import { fetchPage, extractFlwItems, extractPagination } from './_shared.js';
+import { HIANIME_BASE_URL, fetchPage, extractFlwItems, extractPagination } from './_shared.js';
+import { getHianimeSearch } from './search.js';
 
 const TYPE_MAP = {
   movie: 2,
@@ -97,25 +98,48 @@ export const getHianimeAdvancedSearch = async (filters = {}) => {
     params.sort = SORT_MAP[String(sort).toLowerCase()];
   }
 
-  const { url, $ } = await fetchPage('/filter', {
-    searchParams: params,
-    referer: 'https://hianime.ad/',
-  });
+  try {
+    const { url, $ } = await fetchPage('/filter', {
+      searchParams: params,
+      referer: `${HIANIME_BASE_URL}/`,
+    });
 
-  return {
-    source: url,
-    filters: {
-      q: params.keyword || null,
-      type: splitCsv(type),
-      status: splitCsv(status),
-      season: splitCsv(season),
-      language: splitCsv(language),
-      sort: sort || null,
-      genres: genreList,
-      year: yearList,
-      score: score ? Number(score) : null,
-    },
-    pagination: extractPagination($),
-    results: extractFlwItems($),
-  };
+    return {
+      source: url,
+      filters: {
+        q: params.keyword || null,
+        type: splitCsv(type),
+        status: splitCsv(status),
+        season: splitCsv(season),
+        language: splitCsv(language),
+        sort: sort || null,
+        genres: genreList,
+        year: yearList,
+        score: score ? Number(score) : null,
+      },
+      pagination: extractPagination($),
+      results: extractFlwItems($),
+    };
+  } catch (err) {
+    if (params.keyword) {
+      const searchRes = await getHianimeSearch({ q: params.keyword, page: normalizedPage });
+      return {
+        source: `${HIANIME_BASE_URL}/filter`,
+        filters: {
+          q: params.keyword || null,
+          type: splitCsv(type),
+          status: splitCsv(status),
+          season: splitCsv(season),
+          language: splitCsv(language),
+          sort: sort || null,
+          genres: genreList,
+          year: yearList,
+          score: score ? Number(score) : null,
+        },
+        pagination: searchRes.pagination,
+        results: searchRes.results,
+      };
+    }
+    throw err;
+  }
 };

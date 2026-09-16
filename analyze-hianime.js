@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { load } from 'cheerio';
 
-const res = await axios.get('https://hianime.ws/home', {
+const res = await axios.get('https://hianimes.se/home', {
   headers: { 
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
   }
