@@ -81,7 +81,12 @@ export const hianimeEpisodeSourcesController = async (c) => {
     // Rewrite m3u8 source URLs to go through the proxy so segments
     // are PNG-stripped and directly playable in any HLS player.
     const reqUrl = new URL(c.req.url);
-    const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/v2/hianime/proxy/m3u8?url=`;
+    const forwardedHost = (c.req.header('x-forwarded-host') || '').split(',')[0].trim();
+    const forwardedProto = (c.req.header('x-forwarded-proto') || '').split(',')[0].trim();
+    const host = forwardedHost || reqUrl.host;
+    const proto = forwardedProto ? `${forwardedProto}:` : reqUrl.protocol;
+    const proxyBase = `${proto}//${host}/api/v2/hianime/proxy/m3u8?url=`;
+
     if (data?.sources) {
       for (const src of data.sources) {
         if (src.source && src.type === 'm3u8') {

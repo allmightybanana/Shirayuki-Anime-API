@@ -176,28 +176,162 @@ const tryExtractM3u8FromPayload = (payload) => {
   return null;
 };
 
-const fetchEmbedPageM3u8 = async (watchUrl, embedUrl) => {
-  const headers = {
-    'User-Agent': DEFAULT_UA,
-    Accept: 'text/html,application/json,application/javascript,*/*',
-    Referer: watchUrl,
-    Origin: HIANIME_BASE_URL,
-  };
+const OBF_KEY = 'otaku-embed-v1';
 
+function xor(str, key = OBF_KEY) {
+  let out = '';
+  for (let i = 0; i < str.length; i++) {
+    out += String.fromCharCode(str.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+  }
+  return out;
+}
+
+function deobfuscateZoko(blob, key = OBF_KEY) {
   try {
-    const res = await axios.get(embedUrl, {
-      proxy: false,
-      timeout: 20000,
-      headers,
+    const binary = Buffer.from(blob, 'base64').toString('latin1');
+    return JSON.parse(decodeURIComponent(escape(xor(binary, key))));
+  } catch {
+    return null;
+  }
+}
+
+function extractZokoDetails(html, embedUrl) {
+  if (!html || typeof html !== 'string') return null;
+  const match = html.match(/window\.__P\s*=\s*["']([^"']+)["']/);
+  if (!match) return null;
+
+  const data = deobfuscateZoko(match[1]);
+  if (!data || !data.src) return null;
+
+  const tracks = (data.subtitles || [])
+    .filter((s) => s.src || s.file)
+    .map((s) => ({
+      file: s.src || s.file,
+      label: s.label || s.lang || 'English',
+      kind: 'captions',
+      default: Boolean(s.default),
+      forced: false,
+    }));
+
+  return {
+    m3u8: data.src,
+    tracks,
+    intro: data.skip?.intro?.start !== undefined ? data.skip.intro : null,
+    outro: data.skip?.outro?.start !== undefined ? data.skip.outro : null,
+    referer: 'https://zokoanime.video/',
+  };
+}
+
+async function extractMegaplayDetails(html, embedUrl) {
+  try {
+    const urlObj = new URL(embedUrl);
+    let realVideoId = null;
+    if (html) {
+      const $ = load(html);
+      realVideoId = $('#megaplay-player').attr('data-id') || $('[data-id]').attr('data-id');
+      if (!realVideoId) {
+        const idMatch = html.match(/data-id=["']([^"']+)["']/i);
+        if (idMatch) realVideoId = idMatch[1];
+      }
+    }
+    if (!realVideoId) {
+      const pathParts = urlObj.pathname.split('/');
+      if (pathParts[1] === 'stream' && pathParts[3]) {
+        realVideoId = pathParts[3];
+      }
+    }
+    if (!realVideoId) return null;
+
+    const getSourcesUrl = `${urlObj.origin}/stream/getSources?id=${encodeURIComponent(realVideoId)}`;
+    const resp = await axios.get(getSourcesUrl, {
+      headers: {
+        'User-Agent': DEFAULT_UA,
+        Referer: `${urlObj.origin}/`,
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      timeout: 10000,
     });
 
-    return tryExtractM3u8FromPayload(res?.data);
-  } catch (error) {
-    console.log('[resolveEmbedM3u8] axios extraction failed:', error.message);
-  }
+    const sourcesData = resp?.data?.sources;
+    const file = sourcesData?.file || (Array.isArray(sourcesData) ? sourcesData[0]?.file : null);
+    if (!file) return null;
 
-  return null;
-};
+    const tracks = (resp?.data?.tracks || [])
+      .filter((t) => t.file)
+      .map((t) => ({
+        file: t.file,
+        label: t.label || 'English',
+        kind: t.kind || 'captions',
+        default: Boolean(t.default),
+        forced: false,
+      }));
+
+    return {
+      m3u8: file,
+      tracks,
+      intro: resp?.data?.intro || null,
+      outro: resp?.data?.outro || null,
+      referer: `${urlObj.origin}/`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function extractMegaCloudDetails(html, embedUrl) {
+  try {
+    const url = new URL(embedUrl);
+    const extract = (pattern) => String(html).match(pattern)?.[1] ?? null;
+
+    const clientKey =
+      extract(/window\._xy_ws\s*=\s*['"`]([A-Za-z0-9]+)['"`]/) ||
+      extract(/<meta\s+name=['"]_gg_fb['"]\s+content=['"]([A-Za-z0-9]+)['"]/i) ||
+      extract(/_is_th:([A-Za-z0-9]+)/) ||
+      (() => {
+        const x = extract(/x\s*:\s*['"]([A-Za-z0-9]+)['"]/i);
+        const y = extract(/y\s*:\s*['"]([A-Za-z0-9]+)['"]/i);
+        const z = extract(/z\s*:\s*['"]([A-Za-z0-9]+)['"]/i);
+        return x && y && z ? `${x}${y}${z}` : x ?? y ?? z ?? null;
+      })();
+
+    const id = url.pathname.match(/\/e-1\/([^/?]+)/i)?.[1];
+    if (!id || !clientKey) return null;
+
+    const pathMatch = url.pathname.match(/\/embed-2\/([^/]+\/)?e-1\//);
+    const versionPath = pathMatch?.[0] ?? '/embed-2/v3/e-1/';
+
+    const { data } = await axios.get(
+      `https://${url.hostname}${versionPath}getSources?id=${encodeURIComponent(id)}&_k=${encodeURIComponent(clientKey)}`,
+      {
+        headers: { 'User-Agent': DEFAULT_UA, 'X-Requested-With': 'XMLHttpRequest', Referer: embedUrl },
+        timeout: 10000,
+      }
+    );
+
+    const m3u8 = tryExtractM3u8FromPayload(data);
+    if (!m3u8) return null;
+
+    const tracks = (data?.tracks || [])
+      .filter((t) => t.file)
+      .map((t) => ({
+        file: t.file,
+        label: t.label || 'English',
+        kind: t.kind || 'captions',
+        default: Boolean(t.default),
+        forced: false,
+      }));
+
+    return {
+      m3u8,
+      tracks,
+      intro: data?.intro || null,
+      outro: data?.outro || null,
+      referer: embedUrl,
+    };
+  } catch {
+    return null;
+  }
+}
 
 const isHlsResolvableServer = (nameId) => /^hd-\d+$/i.test(String(nameId || ''));
 
@@ -205,84 +339,113 @@ async function getBrowser() {
   return await getBrowserInstance({ useStealth: false });
 }
 
-async function resolveEmbedM3u8(watchUrl, embedUrl) {
+export async function resolveEmbedDetails(watchUrl, embedUrl) {
   if (!embedUrl) return null;
 
-  // Fast path: sometimes the embed link itself is already an m3u8 URL.
+  // 1. Fast path: sometimes the embed link itself is already an m3u8 URL.
   if (/\.m3u8(\?|$)/i.test(embedUrl)) {
-    return embedUrl;
+    return { m3u8: embedUrl, tracks: [], referer: watchUrl };
   }
 
-  // Pattern: https://{host}/{videoId}?... or https://{host}/e/{videoId}?...
-  //       → https://{host}/public/stream/{videoId}/master.m3u8
+  // 2. Direct HTTP fetch of embed HTML
+  let html = null;
+  try {
+    const res = await axios.get(embedUrl, {
+      proxy: false,
+      timeout: 15000,
+      headers: {
+        'User-Agent': DEFAULT_UA,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        Referer: watchUrl || HIANIME_BASE_URL,
+        Origin: HIANIME_BASE_URL,
+      },
+    });
+    html = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+  } catch (err) {
+    console.log('[resolveEmbedDetails] Direct axios fetch failed:', err.message);
+  }
+
+  if (html) {
+    // 3. Check for ZokoAnime (__P obfuscated payload)
+    const zoko = extractZokoDetails(html, embedUrl);
+    if (zoko?.m3u8) {
+      console.log('[resolveEmbedDetails] Successfully extracted ZokoAnime m3u8');
+      return zoko;
+    }
+
+    // 4. Check for MegaPlay
+    if (embedUrl.includes('megaplay')) {
+      const megaplay = await extractMegaplayDetails(html, embedUrl);
+      if (megaplay?.m3u8) {
+        console.log('[resolveEmbedDetails] Successfully extracted MegaPlay m3u8');
+        return megaplay;
+      }
+    }
+
+    // 5. Check for MegaCloud / RabbitStream / RapidCloud
+    if (embedUrl.includes('megacloud') || embedUrl.includes('rabbitstream') || embedUrl.includes('rapidcloud')) {
+      const megacloud = await extractMegaCloudDetails(html, embedUrl);
+      if (megacloud?.m3u8) {
+        console.log('[resolveEmbedDetails] Successfully extracted MegaCloud m3u8');
+        return megacloud;
+      }
+    }
+
+    // 6. Direct m3u8 regex from HTML
+    const directM3u8 = tryExtractM3u8FromPayload(html);
+    if (directM3u8) {
+      return { m3u8: directM3u8, tracks: [], referer: embedUrl };
+    }
+  }
+
+  // 7. Constructed URL attempt
   try {
     const embedParsed = new URL(embedUrl);
     const pathParts = embedParsed.pathname.replace(/^\/+|\/+$/g, '').split('/');
-    // Video ID is the last path segment (after /e/ or just /{id})
     const videoId = pathParts[pathParts.length - 1];
 
     if (videoId && /^[a-f0-9]{8,}$/i.test(videoId)) {
       const constructedUrl = `${embedParsed.origin}/public/stream/${videoId}/master.m3u8`;
-      console.log('[resolveEmbedM3u8] Trying constructed m3u8 URL:', constructedUrl);
-
       const headResp = await fetch(constructedUrl, {
         method: 'HEAD',
         headers: { 'User-Agent': DEFAULT_UA },
       });
-
       if (headResp.ok) {
-        console.log('[resolveEmbedM3u8] Constructed m3u8 URL is valid');
-        return constructedUrl;
+        return { m3u8: constructedUrl, tracks: [], referer: embedUrl };
       }
-      console.log('[resolveEmbedM3u8] Constructed URL returned', headResp.status);
     }
-  } catch (err) {
-    console.log('[resolveEmbedM3u8] Direct URL construction failed:', err.message);
-  }
+  } catch (err) {}
 
-  const embedPageM3u8 = await fetchEmbedPageM3u8(watchUrl, embedUrl);
-  if (embedPageM3u8) return embedPageM3u8;
-
+  // 8. Serverless / Cloudscraper fallback
   if (isServerless) {
-    console.log('[resolveEmbedM3u8] In serverless environment, attempting cloudscraper extraction');
-
-    const headers = {
-      'User-Agent': DEFAULT_UA,
-      Accept: 'text/html,application/json,application/javascript,*/*',
-      Referer: watchUrl,
-      Origin: HIANIME_BASE_URL,
-    };
-
-    // 1) Try cloudscraper first (better chance to bypass CF checks).
     try {
       const cloudscraper = (await import('cloudscraper')).default;
-      const res = await cloudscraper({
+      const csRes = await cloudscraper({
         url: embedUrl,
         method: 'GET',
-        headers,
-        timeout: 20000,
-        challengeTimeout: 20000,
+        headers: {
+          'User-Agent': DEFAULT_UA,
+          Referer: watchUrl,
+        },
+        timeout: 15000,
       });
-
-      const extracted = tryExtractM3u8FromPayload(res);
-      if (extracted) return extracted;
-    } catch (error) {
-      console.log('[resolveEmbedM3u8] cloudscraper extraction failed:', error.message);
-    }
-
+      if (typeof csRes === 'string') {
+        const zoko = extractZokoDetails(csRes, embedUrl);
+        if (zoko?.m3u8) return zoko;
+        const direct = tryExtractM3u8FromPayload(csRes);
+        if (direct) return { m3u8: direct, tracks: [], referer: embedUrl };
+      }
+    } catch {}
     return null;
   }
 
-  const timeoutMs = 25000;
-  const navigationTimeoutMs = 35000;
-
+  // 9. Puppeteer fallback (if available)
   try {
     const browser = await getBrowser();
     const page = await browser.newPage();
-
     await page.setUserAgent(DEFAULT_UA);
-    await page.setDefaultNavigationTimeout(navigationTimeoutMs);
-    await page.setDefaultTimeout(timeoutMs);
+    await page.setDefaultNavigationTimeout(25000);
+    await page.setDefaultTimeout(20000);
 
     let capturedUrl = null;
     let resolveCapture = null;
@@ -304,35 +467,36 @@ async function resolveEmbedM3u8(watchUrl, embedUrl) {
     });
 
     try {
-      const hostPageHtml = `<!doctype html><html><head><meta charset="utf-8"><title>host</title></head><body><iframe id="player" src="${embedUrl}" allow="autoplay; encrypted-media" allowfullscreen style="width:100%;height:100%;border:0;"></iframe></body></html>`;
+      await page.setExtraHTTPHeaders({ Referer: watchUrl });
+      await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
-      await page.setRequestInterception(true);
-      page.on('request', (req) => {
-        if (req.url() === watchUrl) {
-          return req.respond({
-            status: 200,
-            contentType: 'text/html; charset=utf-8',
-            body: hostPageHtml,
-          });
-        }
-        req.continue();
-      });
+      // Check if window.__P exists directly in DOM
+      const evalP = await page.evaluate(() => window.__P).catch(() => null);
+      if (evalP) {
+        const zoko = extractZokoDetails(`<script>window.__P="${evalP}"</script>`, embedUrl);
+        if (zoko?.m3u8) return zoko;
+      }
 
-      await page.goto(watchUrl, {
-        waitUntil: 'networkidle2',
-        timeout: navigationTimeoutMs,
-      });
+      // Try triggering play
+      await page.evaluate(() => {
+        const btn = document.querySelector('.play-button, #player, .overlay, video');
+        if (btn) btn.click();
+      }).catch(() => {});
 
       const timerPromise = new Promise((resolve) => setTimeout(() => resolve(null), 8000));
       await Promise.race([capturePromise, timerPromise]);
-      return capturedUrl;
+
+      if (capturedUrl) {
+        return { m3u8: capturedUrl, tracks: [], referer: embedUrl };
+      }
     } finally {
       await page.close().catch(() => {});
     }
   } catch (error) {
-    console.error('[resolveEmbedM3u8] Puppeteer error:', error.message);
-    return null;
+    console.error('[resolveEmbedDetails] Puppeteer error:', error.message);
   }
+
+  return null;
 }
 
 export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, category }) => {
@@ -360,22 +524,25 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
 
   const shouldResolveHls = isHlsResolvableServer(picked.nameId);
 
-  const [m3u8Result, malId] = await Promise.all([
+  const [embedDetails, malId] = await Promise.all([
     shouldResolveHls
-      ? resolveEmbedM3u8(watchUrl, picked.embed).catch((error) => {
-          console.error('[getHianimeEpisodeSources] Failed to resolve embed m3u8:', error.message);
+      ? resolveEmbedDetails(watchUrl, picked.embed).catch((error) => {
+          console.error('[getHianimeEpisodeSources] Failed to resolve embed details:', error.message);
           return null;
         })
       : Promise.resolve(null),
     resolveMalId(animeId, animeId.replace(/-/g, ' ')).catch(() => null),
   ]);
 
-  const { intro, outro } = await getSkipTimes(malId, episodeNumber).catch(() => ({ intro: null, outro: null }));
-
-  const tracks = extractTracksFromEmbedUrl(picked.embed);
+  const fallbackTracks = extractTracksFromEmbedUrl(picked.embed);
+  const { intro: aniskipIntro, outro: aniskipOutro } = await getSkipTimes(malId, episodeNumber).catch(() => ({ intro: null, outro: null }));
 
   // If HLS direct stream resolution succeeded, return m3u8
-  if (m3u8Result) {
+  if (embedDetails?.m3u8) {
+    const tracks = embedDetails.tracks && embedDetails.tracks.length > 0
+      ? embedDetails.tracks
+      : fallbackTracks;
+
     return {
       animeId,
       title: serverData?.animeId || animeId,
@@ -385,17 +552,17 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
       malId: malId || null,
       sources: [
         {
-          source: m3u8Result,
+          source: embedDetails.m3u8,
           type: 'm3u8',
           quality: null,
-          referer: picked.embed,
+          referer: embedDetails.referer || picked.embed,
           server: picked.nameId || normalizedServer,
           category: normalizedCategory,
         },
       ],
       tracks,
-      intro,
-      outro,
+      intro: embedDetails.intro ?? aniskipIntro,
+      outro: embedDetails.outro ?? aniskipOutro,
     };
   }
 
@@ -417,8 +584,8 @@ export const getHianimeEpisodeSources = async ({ animeEpisodeId, ep, server, cat
         category: normalizedCategory,
       },
     ],
-    tracks,
-    intro,
-    outro,
+    tracks: fallbackTracks,
+    intro: aniskipIntro,
+    outro: aniskipOutro,
   };
 };
