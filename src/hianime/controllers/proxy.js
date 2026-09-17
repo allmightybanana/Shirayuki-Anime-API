@@ -62,10 +62,16 @@ export const hianimeM3u8ProxyController = async (c) => {
     // Determine base URL for resolving relative paths
     const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
 
-    // Build the proxy base for TS segments
+    // Build the proxy base using forwarded headers if present
     const reqUrl = new URL(c.req.url);
+    const forwardedHost = (c.req.header('x-forwarded-host') || '').split(',')[0].trim();
+    const forwardedProto = (c.req.header('x-forwarded-proto') || '').split(',')[0].trim();
+    const host = forwardedHost || reqUrl.host;
+    const proto = forwardedProto ? `${forwardedProto}:` : reqUrl.protocol;
     const refererParam = referer ? `&referer=${encodeURIComponent(referer)}` : '';
-    const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/v2/hianime/proxy/ts?url=`;
+
+    const proxyBase = `${proto}//${host}/api/v2/hianime/proxy/seg.ts?url=`;
+    const m3u8ProxyBase = `${proto}//${host}/api/v2/hianime/proxy/playlist.m3u8?url=`;
 
     // Rewrite segment URLs
     const lines = m3u8Content.split('\n');
@@ -74,31 +80,32 @@ export const hianimeM3u8ProxyController = async (c) => {
 
       // Skip comments/tags and empty lines
       if (!trimmed || trimmed.startsWith('#')) {
-        // But check for URI= in EXT-X-MAP or EXT-X-KEY tags
+        // Check for URI= in EXT-X-MAP or EXT-X-KEY tags
         if (trimmed.includes('URI="')) {
           return trimmed.replace(/URI="([^"]+)"/, (_, uri) => {
             const absUri = uri.startsWith('http') ? uri : baseUrl + uri;
-            return `URI="${proxyBase}${encodeURIComponent(absUri)}${refererParam}"`;
+            return `URI="${proxyBase}${encodeURIComponent(absUri)}${refererParam}&ext=.ts"`;
           });
         }
         return line;
       }
 
-      // This is a segment URL line
+      // This is a segment or sub-playlist URL line
       const absUrl = trimmed.startsWith('http') ? trimmed : baseUrl + trimmed;
 
-      // Sub-playlists (.m3u8) should go through the m3u8 proxy, not the TS proxy
-      if (absUrl.endsWith('.m3u8') || absUrl.includes('.m3u8?')) {
-        const m3u8ProxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/v2/hianime/proxy/m3u8?url=`;
-        return `${m3u8ProxyBase}${encodeURIComponent(absUrl)}${refererParam}`;
+      // Sub-playlists (.m3u8) should go through the playlist proxy
+      if (absUrl.endsWith('.m3u8') || absUrl.includes('.m3u8?') || absUrl.includes('.m3u8&')) {
+        return `${m3u8ProxyBase}${encodeURIComponent(absUrl)}${refererParam}&ext=.m3u8`;
       }
 
-      return `${proxyBase}${encodeURIComponent(absUrl)}${refererParam}`;
+      return `${proxyBase}${encodeURIComponent(absUrl)}${refererParam}&ext=.ts`;
     });
 
     return c.text(rewritten.join('\n'), 200, {
       'Content-Type': 'application/vnd.apple.mpegurl',
       'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
       'Cache-Control': 'no-cache',
     });
   } catch (error) {
@@ -107,11 +114,10 @@ export const hianimeM3u8ProxyController = async (c) => {
 };
 
 /**
- * GET /api/v2/hianime/proxy/ts
+ * GET /api/v2/hianime/proxy/ts (and /seg.ts, /segment.ts)
  *
- * Fetches a PNG-wrapped TS segment from upstream, strips the PNG header
- * (everything up to and including the IEND marker), and returns the raw
- * MPEG-TS data.
+ * Fetches a TS segment from upstream, strips any PNG header if present,
+ * supports HTTP Range requests, and returns raw MPEG-TS data.
  *
  * Query params:
  *   url  – upstream segment URL (required)
@@ -124,14 +130,18 @@ export const hianimeTsProxyController = async (c) => {
     }
 
     const referer = c.req.query('referer') || c.req.header('referer') || 'https://zokoanime.video/';
+    const range = c.req.header('range');
 
-    const resp = await fetch(url, {
-      headers: {
-        'User-Agent': DEFAULT_UA,
-        Referer: referer,
-        Accept: '*/*',
-      },
-    });
+    const headers = {
+      'User-Agent': DEFAULT_UA,
+      Referer: referer,
+      Accept: '*/*',
+    };
+    if (range) {
+      headers['Range'] = range;
+    }
+
+    const resp = await fetch(url, { headers });
 
     if (!resp.ok) {
       return c.json({ success: false, error: `Upstream returned ${resp.status}` }, 502);
@@ -148,12 +158,23 @@ export const hianimeTsProxyController = async (c) => {
       }
     }
 
-    return c.body(buf, 200, {
+    const resHeaders = {
       'Content-Type': 'video/MP2T',
       'Content-Length': String(buf.length),
       'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+      'Accept-Ranges': 'bytes',
       'Cache-Control': 'public, max-age=3600',
-    });
+    };
+
+    const contentRange = resp.headers.get('content-range');
+    if (contentRange) {
+      resHeaders['Content-Range'] = contentRange;
+    }
+
+    const statusCode = resp.status === 206 ? 206 : 200;
+    return c.body(buf, statusCode, resHeaders);
   } catch (error) {
     return c.json({ success: false, error: error.message }, 500);
   }
