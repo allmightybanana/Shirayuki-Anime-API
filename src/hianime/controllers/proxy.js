@@ -40,6 +40,70 @@ export const hianimeM3u8ProxyController = async (c) => {
       return c.json({ success: false, error: 'url query parameter is required' }, 400);
     }
 
+    const accept = (c.req.header('accept') || '').toLowerCase();
+    const isRawRequested = c.req.query('raw') === '1' || c.req.query('raw') === 'true' || c.req.query('format') === 'm3u8';
+
+    // If accessed directly from a browser address bar or iframe (accepting text/html),
+    // serve an embedded HTML5 video player powered by Hls.js so it plays immediately!
+    if (!isRawRequested && accept.includes('text/html') && !accept.includes('application/vnd.apple.mpegurl')) {
+      const playerHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shirayuki Stream Player</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; display: flex; justify-content: center; align-items: center; overflow: hidden; font-family: sans-serif; }
+    #player-container { width: 100%; height: 100%; position: relative; display: flex; justify-content: center; align-items: center; }
+    video { width: 100%; height: 100%; object-fit: contain; }
+    #status { position: absolute; top: 16px; left: 16px; color: #fff; background: rgba(0,0,0,0.7); padding: 6px 12px; border-radius: 6px; font-size: 13px; pointer-events: none; z-index: 10; font-weight: 500; }
+  </style>
+</head>
+<body>
+  <div id="player-container">
+    <div id="status">Loading stream...</div>
+    <video id="player" controls autoplay playsinline></video>
+  </div>
+  <script>
+    const video = document.getElementById('player');
+    const status = document.getElementById('status');
+    const streamUrl = window.location.href + (window.location.href.includes('?') ? '&raw=1' : '?raw=1');
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+      hls.loadSource(streamUrl);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+        status.textContent = 'Ready (' + (data.levels?.[0]?.height || 'HD') + 'p)';
+        setTimeout(() => { status.style.opacity = '0'; status.style.transition = 'opacity 0.5s'; }, 2000);
+        video.play().catch(() => {
+          status.textContent = 'Click to Play';
+          status.style.opacity = '1';
+        });
+      });
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          status.textContent = 'Playback error: ' + data.type;
+          status.style.opacity = '1';
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = streamUrl;
+      video.addEventListener('loadedmetadata', () => {
+        status.style.display = 'none';
+        video.play().catch(() => {});
+      });
+    } else {
+      status.textContent = 'HLS is not supported in this browser.';
+    }
+  </script>
+</body>
+</html>`;
+      return c.html(playerHtml);
+    }
+
     const referer = c.req.query('referer') || c.req.header('referer') || 'https://zokoanime.video/';
 
     const resp = await fetch(url, {
