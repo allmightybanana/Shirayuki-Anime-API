@@ -72,7 +72,19 @@ export const hianimeM3u8ProxyController = async (c) => {
     const streamUrl = window.location.href + (window.location.href.includes('?') ? '&raw=1' : '?raw=1');
 
     if (Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 90,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 600,
+        maxBufferSize: 60 * 1000 * 1000,
+        maxBufferHole: 0.5,
+        highBufferWatchdogPeriod: 2,
+        nudgeOffset: 0.1,
+        nudgeMaxRetry: 5,
+        maxFragLookUpTolerance: 0.25,
+      });
       hls.loadSource(streamUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
@@ -181,7 +193,8 @@ export const hianimeM3u8ProxyController = async (c) => {
  * GET /api/v2/hianime/proxy/ts (and /seg.ts, /segment.ts)
  *
  * Fetches a TS segment from upstream, strips any PNG header if present,
- * supports HTTP Range requests, and returns raw MPEG-TS data.
+ * streams data directly to the client without buffering delays, supports HTTP Range,
+ * and sets long-lived immutable cache headers.
  *
  * Query params:
  *   url  – upstream segment URL (required)
@@ -211,34 +224,76 @@ export const hianimeTsProxyController = async (c) => {
       return c.json({ success: false, error: `Upstream returned ${resp.status}` }, 502);
     }
 
-    const arrayBuf = await resp.arrayBuffer();
-    let buf = new Uint8Array(arrayBuf);
-
-    // Check if the segment is PNG-wrapped (starts with PNG magic: 89 50 4E 47)
-    if (buf.length > 70 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
-      const tsOffset = findIendOffset(buf);
-      if (tsOffset > 0 && tsOffset < buf.length) {
-        buf = buf.slice(tsOffset);
-      }
-    }
-
+    const statusCode = resp.status === 206 ? 206 : 200;
     const resHeaders = {
       'Content-Type': 'video/MP2T',
-      'Content-Length': String(buf.length),
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': '*',
       'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
       'Accept-Ranges': 'bytes',
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': 'public, max-age=31536000, immutable',
     };
 
+    const contentLength = resp.headers.get('content-length');
     const contentRange = resp.headers.get('content-range');
-    if (contentRange) {
-      resHeaders['Content-Range'] = contentRange;
+    if (contentLength) resHeaders['Content-Length'] = contentLength;
+    if (contentRange) resHeaders['Content-Range'] = contentRange;
+
+    const reader = resp.body.getReader();
+    const { value: firstChunk, done } = await reader.read();
+
+    if (done || !firstChunk) {
+      return c.body(new Uint8Array(0), statusCode, resHeaders);
     }
 
-    const statusCode = resp.status === 206 ? 206 : 200;
-    return c.body(buf, statusCode, resHeaders);
+    // Check if PNG-wrapped (starts with PNG magic: 89 50 4E 47)
+    if (firstChunk.length > 70 && firstChunk[0] === 0x89 && firstChunk[1] === 0x50 && firstChunk[2] === 0x4e && firstChunk[3] === 0x47) {
+      const chunks = [firstChunk];
+      let totalLen = firstChunk.length;
+      while (true) {
+        const { value, done: chunkDone } = await reader.read();
+        if (chunkDone) break;
+        chunks.push(value);
+        totalLen += value.length;
+      }
+      const fullBuf = new Uint8Array(totalLen);
+      let offset = 0;
+      for (const ch of chunks) {
+        fullBuf.set(ch, offset);
+        offset += ch.length;
+      }
+      let buf = fullBuf;
+      const tsOffset = findIendOffset(buf);
+      if (tsOffset > 0 && tsOffset < buf.length) {
+        buf = buf.slice(tsOffset);
+      }
+      resHeaders['Content-Length'] = String(buf.length);
+      return c.body(buf, statusCode, resHeaders);
+    }
+
+    // Pure MPEG-TS (starts with 0x47 sync byte) -> Stream chunks directly with zero buffering delay!
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(firstChunk);
+      },
+      async pull(controller) {
+        try {
+          const { value, done: chunkDone } = await reader.read();
+          if (chunkDone) {
+            controller.close();
+          } else {
+            controller.enqueue(value);
+          }
+        } catch (err) {
+          controller.error(err);
+        }
+      },
+      cancel() {
+        reader.cancel();
+      }
+    });
+
+    return c.body(stream, statusCode, resHeaders);
   } catch (error) {
     return c.json({ success: false, error: error.message }, 500);
   }
